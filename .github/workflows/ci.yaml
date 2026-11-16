@@ -27,7 +27,7 @@ jobs:
       pull-requests: read
     runs-on:
       group: large
-    if: (!startsWith(github.head_ref, 'renovate/') && !startsWith(github.head_ref,
+    if: (github.repository_owner == 'siderolabs' && !startsWith(github.head_ref, 'renovate/') && !startsWith(github.head_ref,
       'dependabot/'))
     steps:
       - name: gather-system-info

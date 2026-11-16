@@ -196,6 +196,6 @@ ARG TARGETARCH
 COPY --from=omni-infra-provider-proxmox omni-infra-provider-proxmox-linux-${TARGETARCH} /omni-infra-provider-proxmox
 COPY --from=image-fhs / /
 COPY --from=image-ca-certificates / /
-LABEL org.opencontainers.image.source=https://github.com/siderolabs/omni-infra-provider-proxmox
+LABEL org.opencontainers.image.source=https://github.com/Termibg22/omni-infra-provider-proxmox
 ENTRYPOINT ["/omni-infra-provider-proxmox"]
 

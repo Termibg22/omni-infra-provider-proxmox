@@ -44,7 +44,7 @@ Run the provider using Docker:
 ```bash
 docker run -it -d \
   -v ./config.yaml:/config.yaml \
-  ghcr.io/siderolabs/omni-infra-provider-proxmox \
+  ghcr.io/termibg22/omni-infra-provider-proxmox:v4.0.0 \
   --config-file /config.yaml \
   --omni-api-endpoint https://<account-name>.omni.siderolabs.io/ \
   --omni-service-account-key <infra-provider-key>
@@ -58,7 +58,7 @@ Create a `docker-compose.yaml` file:
 ```yaml
 services:
   omni-infra-provider-proxmox:
-    image: ghcr.io/siderolabs/omni-infra-provider-proxmox
+    image: ghcr.io/termibg22/omni-infra-provider-proxmox:v4.0.0
     volumes:
       - ./config.yaml:/config.yaml
     command: >
