@@ -4,7 +4,12 @@
 
 package provider
 
-import "time"
+import (
+	"context"
+	"time"
+
+	"github.com/luthermonson/go-proxmox"
+)
 
 type NodeStatus = nodeStatus
 
@@ -32,6 +37,58 @@ func BuildFirmwareOptions(data Data, selectedStorage string) map[string]any {
 	return result
 }
 
+func BuildDiskOptions(disks []Disk, storages []string) map[string]any {
+	options := buildDiskOptions(disks, storages)
+
+	result := map[string]any{}
+	for _, option := range options {
+		result[option.Name] = option.Value
+	}
+
+	return result
+}
+
+func BuildNICOptions(nics []NIC) map[string]any {
+	options := buildNICOptions(nics)
+
+	result := map[string]any{}
+	for _, option := range options {
+		result[option.Name] = option.Value
+	}
+
+	return result
+}
+
+func MatchStorage(nodeName string, storages proxmox.Storages, selector string) (string, error) {
+	return matchStorage(nodeName, storages, selector)
+}
+
+func BuildCloudInitNetworkConfig(data Data, nics []NIC, macByIndex map[int]string, allocatedIPByIndex map[int]string) (string, error) {
+	return buildCloudInitNetworkConfig(data, nics, macByIndex, allocatedIPByIndex)
+}
+
+func ExtractVMMACAddresses(nets map[string]string, count int) map[int]string {
+	return extractVMMACAddresses(nets, count)
+}
+
+type IPPoolAllocator = ipPoolAllocator
+
+func NewIPPoolAllocator() *IPPoolAllocator {
+	return newIPPoolAllocator()
+}
+
+func (p *Provisioner) AllocateVMID(ctx context.Context, cluster *proxmox.Cluster, data Data) (int, error) {
+	return p.allocateVMID(ctx, cluster, data)
+}
+
+func (p *Provisioner) ResolveNodeGroupNodes(ctx context.Context, groupName string) ([]string, error) {
+	return p.resolveNodeGroupNodes(ctx, groupName)
+}
+
+func (p *Provisioner) FilterNodesByGroupAndTopology(ctx context.Context, nodes proxmox.NodeStatuses, data Data) (proxmox.NodeStatuses, error) {
+	return p.filterNodesByGroupAndTopology(ctx, nil, nodes, data)
+}
+
 func BuildUSBDeviceOptions(devices []USBDevice) map[string]any {
 	options := buildUSBDeviceOptions(devices)
 
@@ -43,8 +100,8 @@ func BuildUSBDeviceOptions(devices []USBDevice) map[string]any {
 	return result
 }
 
-func PoolCreateDecision(exists bool, poolID, machineRequestSet string) (bool, error) {
-	return poolCreateDecision(exists, poolID, machineRequestSet)
+func PoolCreateDecision(exists bool, poolID, machineRequestSet string, autoCreate ...*bool) (bool, error) {
+	return poolCreateDecision(exists, poolID, machineRequestSet, autoCreate...)
 }
 
 type Scheduler = scheduler

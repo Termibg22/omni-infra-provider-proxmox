@@ -63,6 +63,7 @@ var rootCmd = &cobra.Command{
 		if err != nil {
 			return fmt.Errorf("failed to read Proxmox config file %q", cfg.configFile)
 		}
+		defer configFile.Close() //nolint:errcheck
 
 		decoder := yaml.NewDecoder(configFile)
 
@@ -83,33 +84,47 @@ var rootCmd = &cobra.Command{
 			opts = append(opts, proxmox.WithAPIToken(proxmoxConfig.Proxmox.TokenID, proxmoxConfig.Proxmox.TokenSecret))
 		}
 
+		transport := &http.Transport{}
 		if proxmoxConfig.Proxmox.InsecureSkipVerify {
-			httpClient := &http.Client{
-				Timeout: time.Second * 30,
-				Transport: &http.Transport{
-					TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
-				},
-			}
+			transport.TLSClientConfig = &tls.Config{InsecureSkipVerify: true}
 
 			logger.Info("using insecure connection to Proxmox")
-
-			opts = append(opts, proxmox.WithHTTPClient(
-				httpClient,
-			))
 		}
+
+		httpClient := &http.Client{
+			Timeout:   time.Second * 30,
+			Transport: transport,
+		}
+
+		opts = append(opts, proxmox.WithHTTPClient(httpClient))
 
 		proxmoxClient := proxmox.NewClient(
 			proxmoxConfig.Proxmox.URL,
 			opts...,
 		)
 
-		provisioner := provider.NewProvisioner(proxmoxClient)
+		// Discover live cluster resources (nodes, node groups, storages, bridges, SDN vnets, pools, PCI/USB mappings, HA rules, templates)
+		// and inject them into the JSON Schema so Omni renders real cluster dropdowns and cascading dependencies.
+		activeSchema := schema
+		clusterOpts := provider.DiscoverClusterOptions(cmd.Context(), proxmoxClient, logger, proxmoxConfig.Proxmox.NodeGroups)
+
+		if dynamicSchema, schemaErr := provider.BuildDynamicSchema(schema, clusterOpts); schemaErr != nil {
+			logger.Warn("failed to build dynamic schema from Proxmox cluster, falling back to static schema", zap.Error(schemaErr))
+		} else {
+			activeSchema = dynamicSchema
+		}
+
+		provisioner := provider.NewProvisioner(
+			proxmoxClient,
+			provider.WithDefaultVMIDRange(proxmoxConfig.Proxmox.MinVMID, proxmoxConfig.Proxmox.MaxVMID),
+			provider.WithCustomNodeGroups(proxmoxConfig.Proxmox.NodeGroups),
+		)
 
 		ip, err := infra.NewProvider(meta.ProviderID, provisioner, infra.ProviderConfig{
 			Name:        cfg.providerName,
 			Description: cfg.providerDescription,
 			Icon:        base64.RawStdEncoding.EncodeToString(icon),
-			Schema:      schema,
+			Schema:      activeSchema,
 		})
 		if err != nil {
 			return fmt.Errorf("failed to create infra provider: %w", err)
@@ -125,19 +140,56 @@ var rootCmd = &cobra.Command{
 			clientOptions = append(clientOptions, client.WithServiceAccount(cfg.serviceAccountKey))
 		}
 
-		return ip.Run(cmd.Context(), logger, infra.WithOmniEndpoint(cfg.omniAPIEndpoint), infra.WithClientOptions(
-			clientOptions...,
-		), infra.WithEncodeRequestIDsIntoTokens(), infra.WithVersion(version.Tag))
+		// Periodically refresh the dynamic schema in Omni if the Proxmox cluster topology changes.
+		provider.StartSchemaRefresher(cmd.Context(), provider.SchemaRefresherConfig{
+			CustomNodeGroups: proxmoxConfig.Proxmox.NodeGroups,
+			ProxmoxClient:    proxmoxClient,
+			Logger:           logger,
+			OmniEndpoint:     cfg.omniAPIEndpoint,
+			ProviderID:       meta.ProviderID,
+			BaseSchema:       schema,
+			LastSchema:       activeSchema,
+			ClientOptions:    clientOptions,
+			Interval:         cfg.schemaRefreshInterval,
+		})
+
+		// Periodically reconcile MachineSet / MachineClass updates onto already-provisioned VMs.
+		provider.StartMachineSetUpdater(cmd.Context(), provider.MachineSetUpdaterConfig{
+			Provisioner:   provisioner,
+			Logger:        logger,
+			OmniEndpoint:  cfg.omniAPIEndpoint,
+			ProviderID:    meta.ProviderID,
+			ClientOptions: clientOptions,
+			Interval:      cfg.machineSetSyncInterval,
+		})
+
+		healthCheck := func(ctx context.Context) error {
+			_, err := proxmoxClient.Version(ctx)
+
+			return err
+		}
+
+		return ip.Run(
+			cmd.Context(),
+			logger,
+			infra.WithOmniEndpoint(cfg.omniAPIEndpoint),
+			infra.WithClientOptions(clientOptions...),
+			infra.WithEncodeRequestIDsIntoTokens(),
+			infra.WithVersion(version.Tag),
+			infra.WithHealthCheckFunc(healthCheck),
+		)
 	},
 }
 
 var cfg struct {
-	omniAPIEndpoint     string
-	serviceAccountKey   string
-	providerName        string
-	providerDescription string
-	configFile          string
-	insecureSkipVerify  bool
+	omniAPIEndpoint        string
+	serviceAccountKey      string
+	providerName           string
+	providerDescription    string
+	configFile             string
+	schemaRefreshInterval  time.Duration
+	machineSetSyncInterval time.Duration
+	insecureSkipVerify     bool
 }
 
 func main() {
@@ -161,6 +213,8 @@ func init() {
 	rootCmd.Flags().StringVar(&cfg.providerName, "provider-name", "Proxmox", "provider name as it appears in Omni")
 	rootCmd.Flags().StringVar(&cfg.providerDescription, "provider-description", "Proxmox infrastructure provider", "Provider description as it appears in Omni")
 	rootCmd.Flags().BoolVar(&cfg.insecureSkipVerify, "insecure-skip-verify", false, "ignores untrusted certs on Omni side")
+	rootCmd.Flags().DurationVar(&cfg.schemaRefreshInterval, "schema-refresh-interval", 2*time.Minute, "interval for refreshing dynamic Proxmox cluster options in Omni schema (0 to disable)")
+	rootCmd.Flags().DurationVar(&cfg.machineSetSyncInterval, "machineset-sync-interval", 30*time.Second, "interval for reconciling MachineSet updates onto existing VMs (0 to disable)")
 
 	// Read everything into this config file
 	rootCmd.Flags().StringVar(&cfg.configFile, "config-file", "", "Proxmox provider config")

@@ -434,6 +434,28 @@ func TestFindVMNode(t *testing.T) {
 	require.False(t, found)
 }
 
+func TestFindVMNodeClusterResourcesFastPath(t *testing.T) {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/cluster/resources", func(w http.ResponseWriter, r *http.Request) {
+		require.Equal(t, "vm", r.URL.Query().Get("type"))
+		writeData(t, w, []map[string]any{
+			{fVMID: 100, fNode: pve1, fType: "qemu"},
+			{fVMID: 250, fNode: "pve3", fType: "qemu"},
+		})
+	})
+
+	m := newManager(t, mux)
+
+	node, found, err := m.FindVMNode(context.Background(), 250)
+	require.NoError(t, err)
+	require.True(t, found)
+	require.Equal(t, "pve3", node)
+
+	_, found, err = m.FindVMNode(context.Background(), 999)
+	require.NoError(t, err)
+	require.False(t, found)
+}
+
 func TestTeardownDeregistersWithPurge(t *testing.T) {
 	var deregistered atomic.Bool
 

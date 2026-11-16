@@ -79,6 +79,7 @@ type Config struct {
 	NodeAffinityStrict *bool    `yaml:"node_affinity_strict,omitempty"`
 	Failback           *bool    `yaml:"failback,omitempty"`
 	State              string   `yaml:"state,omitempty"`
+	Group              string   `yaml:"group,omitempty"`
 	Comment            string   `yaml:"comment,omitempty"`
 	ResourceAffinity   string   `yaml:"resource_affinity,omitempty"`
 	Rules              []string `yaml:"rules,omitempty"`
@@ -88,6 +89,7 @@ type Config struct {
 func createOption(cfg Config, sid string) *proxmox.HAResourceCreateOption {
 	opt := &proxmox.HAResourceCreateOption{
 		SID:         sid,
+		Group:       cfg.Group,
 		Comment:     cfg.Comment,
 		MaxRestart:  cfg.MaxRestart,
 		MaxRelocate: cfg.MaxRelocate,
@@ -108,12 +110,13 @@ func createOption(cfg Config, sid string) *proxmox.HAResourceCreateOption {
 // updateOption maps the ha: block onto the HA resource PUT form, or nil when
 // the config sets none of the mutable fields so reconcile can skip the PUT.
 func updateOption(cfg Config) *proxmox.HAResourceUpdateOption {
-	if cfg.State == "" && cfg.Comment == "" && cfg.MaxRestart == nil &&
+	if cfg.State == "" && cfg.Group == "" && cfg.Comment == "" && cfg.MaxRestart == nil &&
 		cfg.MaxRelocate == nil && cfg.Failback == nil {
 		return nil
 	}
 
 	opt := &proxmox.HAResourceUpdateOption{
+		Group:       cfg.Group,
 		Comment:     cfg.Comment,
 		MaxRestart:  cfg.MaxRestart,
 		MaxRelocate: cfg.MaxRelocate,
@@ -207,9 +210,20 @@ func (m *Manager) Teardown(ctx context.Context, sid string) error {
 	return nil
 }
 
-// FindVMNode finds the node hosting vmid by scanning the cluster: HA may have
-// migrated it off its provisioned node, so the persisted node is not authoritative.
+// FindVMNode finds the node hosting vmid by querying /cluster/resources?type=vm
+// (with a per-node fallback scan): HA may have migrated it off its provisioned
+// node, so the persisted node is not authoritative.
 func (m *Manager) FindVMNode(ctx context.Context, vmid int32) (string, bool, error) {
+	if resources, err := m.cluster.Resources(ctx, "vm"); err == nil {
+		for _, res := range resources {
+			if res != nil && res.VMID == uint64(vmid) && res.Node != "" {
+				return res.Node, true, nil
+			}
+		}
+
+		return "", false, nil
+	}
+
 	nodes, err := m.px.Nodes(ctx)
 	if err != nil {
 		return "", false, fmt.Errorf("failed to list nodes: %w", err)
@@ -292,6 +306,50 @@ func (m *Manager) ensureNodeAffinity(ctx context.Context, logger *zap.Logger, se
 	}
 
 	return m.addToRule(ctx, name, sid)
+}
+
+// ReconcileNodeAffinityRule updates the target node list and strictness on an existing
+// per-set node-affinity rule when a MachineSet's node_group or node_affinity_nodes changes.
+func (m *Manager) ReconcileNodeAffinityRule(ctx context.Context, set string, cfg Config) error {
+	if set == "" || len(cfg.NodeAffinityNodes) == 0 {
+		return nil
+	}
+
+	name := ruleName(set, nodeAffinitySuffix)
+	desiredNodes := strings.Join(cfg.NodeAffinityNodes, ",")
+	desiredStrict := proxmox.IntOrBool(cfg.NodeAffinityStrict != nil && *cfg.NodeAffinityStrict)
+
+	for range ruleRetries {
+		rule, err := m.getRule(ctx, name)
+		if err != nil {
+			if errors.Is(err, errNotFound) {
+				return nil
+			}
+
+			return err
+		}
+
+		if rule.Nodes == desiredNodes && rule.Strict == desiredStrict {
+			return nil
+		}
+
+		err = classify(m.cluster.HARuleUpdate(ctx, name, &proxmox.HARuleUpdateOption{
+			Type:      rule.Type,
+			Digest:    rule.Digest,
+			Resources: rule.Resources,
+			Nodes:     desiredNodes,
+			Strict:    desiredStrict,
+		}))
+
+		switch {
+		case err == nil:
+			return nil
+		case !errors.Is(err, errConflict):
+			return fmt.Errorf("failed to update HA node-affinity rule %q: %w", name, err)
+		}
+	}
+
+	return fmt.Errorf("gave up updating HA node-affinity rule %q after %d retries: %w", name, ruleRetries, errConflict)
 }
 
 // ensureResourceAffinity adds sid to the resource-affinity rule, creating it

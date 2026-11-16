@@ -12,6 +12,10 @@ type Config struct {
 
 // Proxmox is the config for accessing Proxmox API.
 type Proxmox struct {
+	// NodeGroups allows defining named logical groups of Proxmox nodes (e.g. "rack-1": ["pve1", "pve2"])
+	// in addition to groups automatically discovered from Proxmox HA Groups, HA Rules, and SDN Zones.
+	NodeGroups map[string][]string `yaml:"nodeGroups,omitempty"`
+
 	URL string `yaml:"url"`
 
 	Username string `yaml:"username,omitempty"`
@@ -20,6 +24,11 @@ type Proxmox struct {
 
 	TokenID     string `yaml:"tokenID,omitempty"`
 	TokenSecret string `yaml:"tokenSecret,omitempty"`
+
+	// Optional default VMID allocation range for VMs created by this provider.
+	// Can also be overridden per MachineClass in Omni.
+	MinVMID int `yaml:"minVMID,omitempty"`
+	MaxVMID int `yaml:"maxVMID,omitempty"`
 
 	InsecureSkipVerify bool `yaml:"insecureSkipVerify,omitempty"`
 }

@@ -20,6 +20,13 @@ proxmox:
   url: "https://homelab.proxmox:8006/api2/json"
   insecureSkipVerify: true
   realm: "pam"
+  # Optional default VMID range for VMs created by Omni:
+  # minVMID: 5000
+  # maxVMID: 5999
+  # Optional logical node groups for topology-aware placement & reactive UI filtering:
+  # nodeGroups:
+  #   rack-a: ["pve1", "pve2"]
+  #   gpu-nodes: ["pve3"]
 ```
 
 > **Note:**
@@ -233,6 +240,55 @@ client-side spread is disabled.
 For dynamic rebalancing, enable the cluster resource scheduler in `datacenter.cfg`
 (`crs: ha=dynamic`, Proxmox VE 9.2+).
 See the [Proxmox HA manager documentation](https://pve.proxmox.com/pve-docs/chapter-ha-manager.html).
+
+### Enterprise Features: Smart Workload Profiles, Unified Disks/NICs, LACP Bonding & Live MachineSet Reconciliation
+
+This provider discovers your Proxmox cluster topology in real time (and refreshes the Omni UI schema periodically via `--schema-refresh-interval`) and reconciles updates on existing `MachineSet`s (`--machineset-sync-interval`).
+
+```yaml
+config:
+  workload_profile: storage-node # standard | control-plane | storage-node | gpu-ai-worker | hardened-secure
+  node_group: rack-a
+  cores: 8
+  memory: 16384
+  min_vmid: 5000
+  max_vmid: 5999
+  talos_extensions:
+    - siderolabs/iscsi-tools
+    - siderolabs/util-linux-tools
+  disks:
+    - size: 40
+      storage: local-lvm
+      ssd: true
+      discard: true
+      iothread: true
+    - size: 500
+      storage: nvme-pool
+      volume_name: ceph-data # Auto-generates Talos UserVolumeConfig mounted at /var/mnt/ceph-data
+      iops_read: 10000
+      iops_write: 5000
+      mbps_read: 1000
+      mbps_write: 500
+  nics:
+    - bridge: vmbr0
+      vlan: 100
+      mtu: 9000
+      ip_pool: "10.10.100.50-10.10.100.99/24"
+      gateway4: "10.10.100.1"
+    - bridge: vmbr1
+      mtu: 9000
+  bonds:
+    - name: bond0
+      interfaces: ["net0", "net1"]
+      mode: 802.3ad
+      mtu: 9000
+      addresses: ["10.10.200.50/24"]
+  security_groups:
+    - k8s-nodes
+  replication:
+    enabled: true
+    schedule: "*/15"
+```
 
 ### Using Executable
 

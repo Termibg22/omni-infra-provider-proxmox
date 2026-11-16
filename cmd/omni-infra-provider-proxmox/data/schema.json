@@ -1,71 +1,741 @@
 {
   "type": "object",
+  "title": "Proxmox VM Configuration",
   "properties": {
-    "cores": {
-      "type": "integer",
-      "minimum": 1,
-      "description": "Number of CPU cores per socket"
-    },
-    "sockets": {
-      "type": "integer",
-      "minimum": 1,
-      "description": "Number of CPU sockets"
-    },
-    "storage_selector": {
+    "workload_profile": {
       "type": "string",
-      "description": "CEL expression for selecting VM disk image storage"
+      "title": "Workload Profile (Smart Preset)",
+      "default": "standard",
+      "enum": [
+        "standard",
+        "control-plane",
+        "storage-node",
+        "gpu-ai-worker",
+        "hardened-secure"
+      ],
+      "description": "Smart preset that pre-configures optimal defaults and Talos extensions. 'standard': balanced K8s node; 'control-plane': HA control plane node (HA anti-affinity, startup order=1, hardware watchdog, VM protection); 'storage-node': Ceph/Longhorn/Mayastor node (iSCSI/util-linux extensions, io_uring, cache=none, iothread); 'gpu-ai-worker': NVIDIA GPU/AI node (q35, host CPU, OVMF, NUMA, balloon=false, NVIDIA extensions); 'hardened-secure': Zero-Trust node (OVMF UEFI, Secure Boot, TPM 2.0, VM protection, VirtIO RNG)."
+    },
+    "node_group": {
+      "type": "string",
+      "title": "Node Group (Topology Filter)",
+      "default": "",
+      "description": "Select a Proxmox node group (auto-discovered from HA Groups, HA Node-Affinity Rules, SDN Zones, Hardware Groups, or config.yaml). Selecting a group automatically updates the Node selector, Storages, Network Bridges, HA Affinity, and PCI/USB Mappings to match that group's capabilities."
     },
     "node": {
       "type": "string",
-      "description": "Run the VM on a specific Proxmox node"
+      "title": "Proxmox Node",
+      "default": "",
+      "description": "Run the VM on a specific Proxmox node. Leave empty to let the placement strategy auto-select an online node (within 'node_group' if selected)."
     },
     "placement_strategy": {
       "type": "string",
+      "title": "Node Placement Strategy",
+      "default": "spread",
       "enum": [
         "spread",
         "fewer-vms",
         "round-robin",
         "binpack"
       ],
-      "description": "Node selection strategy for auto-provisioned VMs, ignored when 'node' is set. 'spread' (default) balances by free memory, 'fewer-vms' prefers nodes running the fewest VMs, 'round-robin' cycles nodes within a machine request set, 'binpack' packs onto the most-loaded node that still fits."
+      "description": "Node selection strategy for auto-provisioned VMs, ignored when 'node' is set. 'spread' (default) balances by free memory and CPU, 'fewer-vms' prefers nodes running the fewest VMs, 'round-robin' cycles nodes within a machine request set, 'binpack' packs onto the most-loaded node that still fits."
+    },
+    "provisioning_mode": {
+      "type": "string",
+      "title": "Provisioning Mode",
+      "default": "iso",
+      "enum": [
+        "iso",
+        "clone"
+      ],
+      "description": "Choose 'iso' (default) to provision from an official Talos Image Factory ISO, or 'clone' to clone an existing Proxmox VM Template."
+    },
+    "template_vmid": {
+      "type": "string",
+      "title": "VM Template (Clone Source)",
+      "description": "Proxmox VM Template to clone when 'provisioning_mode' is set to 'clone' (loaded from templates in your Proxmox cluster)."
+    },
+    "full_clone": {
+      "type": "boolean",
+      "title": "Full Clone",
+      "default": true,
+      "description": "Perform a full disk clone (true) or linked clone (false) when cloning from a Proxmox VM Template."
+    },
+    "pool": {
+      "type": "string",
+      "title": "Resource Pool",
+      "description": "Proxmox resource pool. If left empty, defaults to a pool named after the Omni MachineRequestSet."
+    },
+    "auto_create_pool": {
+      "type": "boolean",
+      "title": "Auto-Create Resource Pool",
+      "default": true,
+      "description": "Automatically create the specified Proxmox resource pool if it does not already exist."
+    },
+    "min_vmid": {
+      "type": "integer",
+      "title": "Minimum VMID",
+      "minimum": 100,
+      "maximum": 999999999,
+      "description": "Optional lower bound for Proxmox VMID allocation (e.g. 5000). When set, the provider allocates the first free VMID >= min_vmid."
+    },
+    "max_vmid": {
+      "type": "integer",
+      "title": "Maximum VMID",
+      "minimum": 100,
+      "maximum": 999999999,
+      "description": "Optional upper bound for Proxmox VMID allocation (e.g. 5999)."
+    },
+    "architecture": {
+      "type": "string",
+      "title": "CPU Architecture",
+      "default": "amd64",
+      "enum": [
+        "amd64",
+        "arm64"
+      ],
+      "description": "Target CPU architecture for the Talos installation media."
+    },
+    "talos_extensions": {
+      "type": "array",
+      "title": "Talos System Extensions",
+      "description": "Additional official Talos system extensions to embed in the installation image (siderolabs/qemu-guest-agent is always included automatically).",
+      "items": {
+        "type": "string",
+        "minLength": 1
+      }
+    },
+    "extra_kernel_args": {
+      "type": "array",
+      "title": "Extra Talos Kernel Arguments",
+      "description": "Additional Linux kernel command-line parameters (e.g. 'intel_iommu=on', 'iommu=pt', 'console=ttyS0').",
+      "items": {
+        "type": "string",
+        "minLength": 1
+      }
+    },
+    "cores": {
+      "type": "integer",
+      "title": "CPU Cores per Socket",
+      "default": 2,
+      "minimum": 1,
+      "description": "Number of CPU cores per socket"
+    },
+    "sockets": {
+      "type": "integer",
+      "title": "CPU Sockets",
+      "default": 1,
+      "minimum": 1,
+      "description": "Number of CPU sockets"
+    },
+    "cpu_type": {
+      "type": "string",
+      "title": "CPU Type",
+      "default": "x86-64-v2-AES",
+      "enum": [
+        "x86-64-v2-AES",
+        "x86-64-v3",
+        "x86-64-v4",
+        "host",
+        "max",
+        "kvm64",
+        "qemu64"
+      ],
+      "description": "QEMU CPU model. Use 'host' for GPU passthrough/HPC or 'x86-64-v2-AES' (default) for live-migration compatibility."
+    },
+    "cpu_flags": {
+      "type": "string",
+      "title": "Extra CPU Flags",
+      "description": "Optional semicolon-separated CPU flags appended to the CPU model (e.g. '+aes;+avx2;+pdpe1gb')."
+    },
+    "cpu_limit": {
+      "type": "number",
+      "title": "CPU Limit (Max Cores)",
+      "minimum": 0,
+      "description": "Optional limit on total CPU usage in cores (0 for unlimited)."
+    },
+    "cpu_units": {
+      "type": "integer",
+      "title": "CPU Scheduler Weight (Units)",
+      "minimum": 1,
+      "maximum": 262144,
+      "description": "Optional relative CPU scheduler weight for this VM."
     },
     "memory": {
       "type": "integer",
+      "title": "Memory (MB)",
+      "default": 4096,
       "minimum": 2048,
-      "description": "Memory in MB"
+      "description": "RAM allocation in megabytes (MB)"
+    },
+    "balloon": {
+      "type": "boolean",
+      "title": "Memory Ballooning",
+      "default": true,
+      "description": "Enable memory ballooning. Set to false for GPU passthrough or hugepages."
+    },
+    "numa": {
+      "type": "boolean",
+      "title": "Enable NUMA",
+      "default": false,
+      "description": "Enable NUMA topology for better memory locality on multi-socket systems"
+    },
+    "hugepages": {
+      "type": "string",
+      "title": "Hugepages",
+      "enum": [
+        "any",
+        "2MB",
+        "1GB"
+      ],
+      "description": "Enable hugepages for reduced TLB misses. Use '1GB' for GPU/HPC workloads"
+    },
+    "iso_storage": {
+      "type": "string",
+      "title": "ISO Storage",
+      "description": "Proxmox storage used to download and attach the Talos installation ISO and Cloud-Init config. If omitted, the first enabled ISO-capable storage on the node is used."
+    },
+    "storage": {
+      "type": "string",
+      "title": "Primary Disk Storage",
+      "description": "Proxmox storage pool for the primary VM boot disk (loaded directly from your Proxmox cluster)."
+    },
+    "storage_selector": {
+      "type": "string",
+      "title": "Primary Disk Storage Selector (Advanced / CEL)",
+      "description": "Optional CEL expression or storage name for selecting VM disk storage (e.g. 'name == \"local-lvm\"' or 'storageType == \"lvmthin\"'). Not required when 'storage' or 'disks' is set."
     },
     "disk_size": {
       "type": "integer",
+      "title": "Primary Disk Size (GB)",
+      "default": 20,
       "minimum": 5,
-      "description": "Disk size in GB"
+      "description": "Primary boot disk size in GB (used when 'disks' list is not specified)."
+    },
+    "disks": {
+      "type": "array",
+      "title": "Disks (Add / Remove / Resize VM Disks)",
+      "description": "Flexible list of disks attached to the VM. The first entry is the primary boot disk (scsi0) and subsequent entries are additional data disks (scsi1, scsi2, ...). Supports live addition, removal, and online resizing on existing MachineSets.",
+      "items": {
+        "type": "object",
+        "title": "VM Disk",
+        "properties": {
+          "storage": {
+            "type": "string",
+            "title": "Storage Pool",
+            "description": "Proxmox storage pool for this disk"
+          },
+          "storage_selector": {
+            "type": "string",
+            "title": "Storage Selector (Optional CEL)",
+            "description": "Optional CEL expression for selecting storage if 'storage' is not explicitly chosen"
+          },
+          "size": {
+            "type": "integer",
+            "title": "Disk Size (GB)",
+            "default": 20,
+            "minimum": 1,
+            "description": "Disk size in GB"
+          },
+          "volume_name": {
+            "type": "string",
+            "title": "Talos UserVolume Name (Auto-Mount)",
+            "description": "Optional volume name (for data disks scsi1+): automatically generates a Talos UserVolumeConfig patch to format and mount this disk at /var/mnt/<volume_name> (ideal for Longhorn/Ceph/LocalPath)."
+          },
+          "bus": {
+            "type": "string",
+            "title": "Bus / Controller",
+            "default": "scsi",
+            "enum": [
+              "scsi",
+              "virtio",
+              "sata"
+            ],
+            "description": "Disk controller bus type (default: scsi)"
+          },
+          "ssd": {
+            "type": "boolean",
+            "title": "SSD Emulation",
+            "default": true,
+            "description": "Enable SSD emulation (ssd=1) for better performance on SSD/NVMe storage"
+          },
+          "discard": {
+            "type": "boolean",
+            "title": "TRIM / Discard",
+            "default": true,
+            "description": "Enable TRIM/discard support for thin-provisioned storage"
+          },
+          "iothread": {
+            "type": "boolean",
+            "title": "Dedicated IO Thread",
+            "default": true,
+            "description": "Enable dedicated IO thread (iothread=1) for better disk performance"
+          },
+          "cache": {
+            "type": "string",
+            "title": "Cache Mode",
+            "default": "none",
+            "enum": [
+              "none",
+              "writethrough",
+              "writeback",
+              "directsync",
+              "unsafe"
+            ],
+            "description": "Disk cache mode"
+          },
+          "aio": {
+            "type": "string",
+            "title": "Async IO (AIO)",
+            "default": "io_uring",
+            "enum": [
+              "io_uring",
+              "native",
+              "threads"
+            ],
+            "description": "Async IO mode. Use 'io_uring' for best performance on modern kernels"
+          },
+          "backup": {
+            "type": "boolean",
+            "title": "Include in Backups",
+            "default": true,
+            "description": "Include this disk in Proxmox VM backups"
+          },
+          "replicate": {
+            "type": "boolean",
+            "title": "Enable Replication",
+            "default": false,
+            "description": "Include this disk in Proxmox storage replication jobs"
+          },
+          "iops_read": {
+            "type": "integer",
+            "title": "Read IOPS Limit (QoS)",
+            "minimum": 0,
+            "description": "Optional maximum read IOPS limit for this disk"
+          },
+          "iops_write": {
+            "type": "integer",
+            "title": "Write IOPS Limit (QoS)",
+            "minimum": 0,
+            "description": "Optional maximum write IOPS limit for this disk"
+          },
+          "mbps_read": {
+            "type": "number",
+            "title": "Read Bandwidth Limit (MB/s QoS)",
+            "minimum": 0,
+            "description": "Optional maximum read throughput in MB/s"
+          },
+          "mbps_write": {
+            "type": "number",
+            "title": "Write Bandwidth Limit (MB/s QoS)",
+            "minimum": 0,
+            "description": "Optional maximum write throughput in MB/s"
+          }
+        },
+        "required": [
+          "size"
+        ]
+      }
+    },
+    "nics": {
+      "type": "array",
+      "title": "Network Interfaces (Add / Remove NICs)",
+      "description": "Flexible list of network interfaces attached to the VM (net0, net1, net2, ...). Supports both DHCP and static IP / IP Pool Cloud-Init configuration.",
+      "items": {
+        "type": "object",
+        "title": "Network Interface (NIC)",
+        "properties": {
+          "bridge": {
+            "type": "string",
+            "title": "Network Bridge / SDN VNet",
+            "default": "vmbr0",
+            "description": "Proxmox network bridge (e.g. vmbr0) or SDN VNet"
+          },
+          "model": {
+            "type": "string",
+            "title": "NIC Model",
+            "default": "virtio",
+            "enum": [
+              "virtio",
+              "e1000",
+              "e1000e",
+              "vmxnet3",
+              "rtl8139"
+            ],
+            "description": "Virtual network card model (default: virtio)"
+          },
+          "vlan": {
+            "type": "integer",
+            "title": "VLAN Tag",
+            "default": 0,
+            "minimum": 0,
+            "maximum": 4094,
+            "description": "VLAN tag (0 for untagged)"
+          },
+          "firewall": {
+            "type": "boolean",
+            "title": "Proxmox Firewall",
+            "default": true,
+            "description": "Enable per-NIC Proxmox firewall (fwbr)"
+          },
+          "mtu": {
+            "type": "integer",
+            "title": "MTU",
+            "minimum": 1,
+            "maximum": 65520,
+            "description": "Optional MTU (set 1 to inherit from bridge, or e.g. 9000 for Jumbo Frames)"
+          },
+          "queues": {
+            "type": "integer",
+            "title": "Multiqueue",
+            "minimum": 1,
+            "maximum": 64,
+            "description": "Optional number of VirtIO multiqueue packet queues (recommended: match vCPU count for high throughput)"
+          },
+          "rate_limit": {
+            "type": "number",
+            "title": "Rate Limit (MB/s)",
+            "minimum": 0,
+            "description": "Optional bandwidth rate limit in MB/s"
+          },
+          "mac_address": {
+            "type": "string",
+            "title": "MAC Address",
+            "description": "Optional static MAC address (leave empty for auto-generated)"
+          },
+          "trunks": {
+            "type": "string",
+            "title": "VLAN Trunks",
+            "description": "Optional semicolon-separated list of allowed VLAN IDs (e.g. '10;20;30')"
+          },
+          "dhcp4": {
+            "type": "boolean",
+            "title": "Enable DHCPv4",
+            "default": true,
+            "description": "Enable IPv4 DHCP on this interface (automatically defaults to false when static addresses or ip_pool are set unless explicitly enabled)."
+          },
+          "dhcp6": {
+            "type": "boolean",
+            "title": "Enable DHCPv6",
+            "default": false,
+            "description": "Enable IPv6 DHCP on this interface."
+          },
+          "ip_pool": {
+            "type": "string",
+            "title": "Static IP Pool / Range (Auto-Assigned per VM)",
+            "description": "Optional IP range with CIDR prefix (e.g. '192.168.1.100-192.168.1.150/24' or '192.168.1.0/24') from which each VM in the MachineClass automatically receives a unique static IP via Cloud-Init."
+          },
+          "addresses": {
+            "type": "array",
+            "title": "Static IP Addresses (CIDR)",
+            "description": "Static IPv4/IPv6 addresses in CIDR notation (e.g. '192.168.1.50/24', 'fd00::50/64').",
+            "items": {
+              "type": "string",
+              "minLength": 3
+            }
+          },
+          "gateway4": {
+            "type": "string",
+            "title": "IPv4 Default Gateway",
+            "description": "Optional IPv4 gateway address (e.g. '192.168.1.1')."
+          },
+          "gateway6": {
+            "type": "string",
+            "title": "IPv6 Default Gateway",
+            "description": "Optional IPv6 gateway address (e.g. 'fe80::1')."
+          },
+          "nameservers": {
+            "type": "array",
+            "title": "DNS Nameservers",
+            "description": "Optional DNS server IP addresses for this interface (e.g. '1.1.1.1', '8.8.8.8').",
+            "items": {
+              "type": "string"
+            }
+          },
+          "search_domains": {
+            "type": "array",
+            "title": "DNS Search Domains",
+            "description": "Optional DNS search domains (e.g. 'cluster.local', 'internal.lan').",
+            "items": {
+              "type": "string"
+            }
+          },
+          "routes": {
+            "type": "array",
+            "title": "Static Routes",
+            "description": "Optional static routing entries for this interface.",
+            "items": {
+              "type": "object",
+              "title": "Route",
+              "properties": {
+                "to": {
+                  "type": "string",
+                  "title": "Destination Prefix (CIDR)",
+                  "description": "Destination subnet in CIDR format (e.g. '10.244.0.0/16' or '0.0.0.0/0')"
+                },
+                "via": {
+                  "type": "string",
+                  "title": "Next-Hop Gateway (Via)",
+                  "description": "Next-hop router IP address"
+                },
+                "metric": {
+                  "type": "integer",
+                  "title": "Route Metric",
+                  "minimum": 0,
+                  "description": "Optional route priority metric"
+                },
+                "on_link": {
+                  "type": "boolean",
+                  "title": "On-Link",
+                  "default": false,
+                  "description": "Mark route as directly reachable on link"
+                }
+              },
+              "required": [
+                "to",
+                "via"
+              ]
+            }
+          }
+        },
+        "required": [
+          "bridge"
+        ]
+      }
+    },
+    "bonds": {
+      "type": "array",
+      "title": "Network Bonds (LACP 802.3ad / Active-Backup)",
+      "description": "Optional Cloud-Init bonded interfaces aggregating two or more VM NICs (e.g. eth0 + eth1 into bond0).",
+      "items": {
+        "type": "object",
+        "title": "Network Bond",
+        "properties": {
+          "name": {
+            "type": "string",
+            "title": "Bond Interface Name",
+            "default": "bond0",
+            "description": "Bond interface name inside Talos (e.g. bond0)"
+          },
+          "interfaces": {
+            "type": "array",
+            "title": "Member Interfaces",
+            "description": "Member ethernet interface names (e.g. ['eth0', 'eth1'])",
+            "items": {
+              "type": "string"
+            }
+          },
+          "mode": {
+            "type": "string",
+            "title": "Bonding Mode",
+            "default": "802.3ad",
+            "enum": [
+              "802.3ad",
+              "active-backup",
+              "balance-xor",
+              "broadcast",
+              "balance-tlb",
+              "balance-alb"
+            ],
+            "description": "Bonding mode ('802.3ad' for LACP, 'active-backup' for failover)"
+          },
+          "lacp_rate": {
+            "type": "string",
+            "title": "LACP Rate",
+            "default": "fast",
+            "enum": [
+              "fast",
+              "slow"
+            ]
+          },
+          "transmit_hash_policy": {
+            "type": "string",
+            "title": "Transmit Hash Policy",
+            "default": "layer2+3",
+            "enum": [
+              "layer2",
+              "layer2+3",
+              "layer3+4"
+            ]
+          },
+          "mii_monitor_interval": {
+            "type": "integer",
+            "title": "MII Monitor Interval (ms)",
+            "default": 100,
+            "minimum": 0
+          },
+          "mtu": {
+            "type": "integer",
+            "title": "Bond MTU",
+            "minimum": 576,
+            "maximum": 65520
+          },
+          "dhcp4": {
+            "type": "boolean",
+            "title": "Enable DHCPv4",
+            "default": true
+          },
+          "addresses": {
+            "type": "array",
+            "title": "Static IP Addresses (CIDR)",
+            "items": {
+              "type": "string"
+            }
+          },
+          "gateway4": {
+            "type": "string",
+            "title": "IPv4 Default Gateway"
+          }
+        },
+        "required": [
+          "name",
+          "interfaces"
+        ]
+      }
+    },
+    "dns_servers": {
+      "type": "array",
+      "title": "Global DNS Servers",
+      "description": "Optional DNS server IPs applied via Cloud-Init (e.g. ['1.1.1.1', '8.8.8.8']).",
+      "items": {
+        "type": "string"
+      }
+    },
+    "dns_search_domains": {
+      "type": "array",
+      "title": "Global DNS Search Domains",
+      "description": "Optional DNS search domains applied via Cloud-Init.",
+      "items": {
+        "type": "string"
+      }
+    },
+    "security_groups": {
+      "type": "array",
+      "title": "Proxmox Firewall Security Groups",
+      "description": "Proxmox cluster firewall security groups to automatically attach to the VM (loaded from your Proxmox cluster).",
+      "items": {
+        "type": "string",
+        "minLength": 1
+      }
+    },
+    "firewall_options": {
+      "type": "object",
+      "title": "Proxmox VM Firewall Policy",
+      "description": "Configure VM-level Proxmox Firewall policy and anti-spoofing filters (/nodes/{node}/qemu/{vmid}/firewall/options).",
+      "properties": {
+        "enable": {
+          "type": "boolean",
+          "title": "Enable VM Firewall",
+          "default": true
+        },
+        "policy_in": {
+          "type": "string",
+          "title": "Inbound Policy",
+          "enum": [
+            "ACCEPT",
+            "DROP",
+            "REJECT"
+          ]
+        },
+        "policy_out": {
+          "type": "string",
+          "title": "Outbound Policy",
+          "enum": [
+            "ACCEPT",
+            "DROP",
+            "REJECT"
+          ]
+        },
+        "dhcp": {
+          "type": "boolean",
+          "title": "Allow DHCP"
+        },
+        "macfilter": {
+          "type": "boolean",
+          "title": "MAC Address Anti-Spoofing Filter"
+        },
+        "ipfilter": {
+          "type": "boolean",
+          "title": "IP Address Anti-Spoofing Filter"
+        },
+        "ndp": {
+          "type": "boolean",
+          "title": "Allow IPv6 NDP"
+        },
+        "radv": {
+          "type": "boolean",
+          "title": "Allow Router Advertisements"
+        }
+      }
+    },
+    "replication": {
+      "type": "object",
+      "title": "Proxmox Storage Replication (ZFS / Local HA)",
+      "description": "Configure automatic Proxmox storage replication (/cluster/replication) for local ZFS storage across nodes.",
+      "properties": {
+        "enabled": {
+          "type": "boolean",
+          "title": "Enable Storage Replication",
+          "default": false
+        },
+        "schedule": {
+          "type": "string",
+          "title": "Replication Schedule",
+          "default": "*/15",
+          "description": "Proxmox calendar event schedule (e.g. '*/15' for every 15 minutes, '*/5' for every 5 minutes)"
+        },
+        "target_node": {
+          "type": "string",
+          "title": "Target Node",
+          "description": "Target Proxmox node for replication (leave empty to auto-select another online node in the group/cluster)"
+        },
+        "rate_limit": {
+          "type": "number",
+          "title": "Rate Limit (MB/s)",
+          "minimum": 0
+        }
+      }
     },
     "network_bridge": {
       "type": "string",
-      "description": "Network bridge to attach to the VM, ex. vmbr0"
+      "title": "Primary Network Bridge (Legacy)",
+      "default": "vmbr0",
+      "description": "Network bridge to attach to the primary NIC (net0) when 'nics' list is not used, ex. vmbr0"
     },
     "vlan": {
       "type": "integer",
+      "title": "Primary NIC VLAN Tag (Legacy)",
+      "default": 0,
       "minimum": 0,
+      "maximum": 4094,
       "description": "VLAN tag for primary NIC, set to 0 for none"
     },
     "network_firewall": {
       "type": "boolean",
+      "title": "Primary NIC Firewall (Legacy)",
+      "default": true,
       "description": "Enable per-VM firewall (fwbr) on primary NIC. Defaults to true. Set false when L2-broadcast services need traffic to bypass fwbr."
     },
     "disk_ssd": {
       "type": "boolean",
+      "title": "Primary Disk SSD Emulation",
+      "default": true,
       "description": "Enable SSD emulation (ssd=1) for better performance on SSD/NVMe storage"
     },
     "disk_discard": {
       "type": "boolean",
+      "title": "Primary Disk TRIM/Discard",
+      "default": true,
       "description": "Enable TRIM/discard support for thin-provisioned storage"
     },
     "disk_iothread": {
       "type": "boolean",
+      "title": "Primary Disk IO Thread",
+      "default": true,
       "description": "Enable dedicated IO thread for better disk performance"
     },
     "disk_cache": {
       "type": "string",
+      "title": "Primary Disk Cache Mode",
       "enum": [
         "none",
         "writethrough",
@@ -77,6 +747,7 @@
     },
     "disk_aio": {
       "type": "string",
+      "title": "Primary Disk Async IO",
       "enum": [
         "native",
         "threads",
@@ -84,52 +755,128 @@
       ],
       "description": "Async IO mode. Use 'io_uring' for best performance on modern kernels"
     },
-    "cpu_type": {
+    "scsihw": {
       "type": "string",
-      "description": "CPU type. Use 'host' for GPU passthrough/HPC, or 'x86-64-v2-AES' (default) for compatibility"
+      "title": "SCSI Controller Type",
+      "default": "virtio-scsi-single",
+      "enum": [
+        "virtio-scsi-single",
+        "virtio-scsi-pci",
+        "lsi",
+        "lsi53c810",
+        "megasas",
+        "pvscsi"
+      ],
+      "description": "SCSI controller model. 'virtio-scsi-single' (default) enables one controller per disk for optimal iothread performance."
     },
     "machine_type": {
       "type": "string",
+      "title": "Machine Type",
+      "default": "q35",
       "enum": [
         "q35",
         "i440fx"
       ],
-      "description": "Machine type. Use 'q35' for GPU passthrough (native PCIe support)"
+      "description": "QEMU machine type. Use 'q35' for PCIe / GPU passthrough."
     },
     "bios": {
       "type": "string",
+      "title": "Firmware (BIOS / UEFI)",
+      "default": "seabios",
       "enum": [
         "seabios",
         "ovmf"
       ],
-      "description": "VM firmware. When set to 'ovmf', the provider also creates a 4MB EFI disk on the selected VM storage."
+      "description": "VM firmware. When set to 'ovmf', the provider also creates a 4MB EFI disk on the selected VM storage and enables UEFI Secure Boot / TPM options."
+    },
+    "secure_boot": {
+      "type": "boolean",
+      "title": "UEFI Secure Boot",
+      "default": false,
+      "description": "Enable UEFI Secure Boot (requires bios='ovmf'). Enrolls keys in the EFI disk and requests SecureBoot Talos installation media."
+    },
+    "tpm": {
+      "type": "boolean",
+      "title": "TPM 2.0 State Device",
+      "default": false,
+      "description": "Attach a virtual TPM 2.0 state disk (tpmstate0) on the primary storage (useful for Talos disk encryption and Secure Boot)."
+    },
+    "rng": {
+      "type": "boolean",
+      "title": "VirtIO Hardware RNG (/dev/urandom)",
+      "default": true,
+      "description": "Attach a VirtIO hardware random number generator (rng0) to prevent cryptographic entropy starvation."
+    },
+    "watchdog_model": {
+      "type": "string",
+      "title": "Hardware Watchdog Model",
+      "enum": [
+        "",
+        "i6300esb",
+        "ib700"
+      ],
+      "description": "Optional virtual hardware watchdog timer model (e.g. 'i6300esb')."
+    },
+    "watchdog_action": {
+      "type": "string",
+      "title": "Watchdog Action",
+      "default": "reset",
+      "enum": [
+        "reset",
+        "poweroff",
+        "pause",
+        "debug",
+        "none"
+      ],
+      "description": "Action taken by Proxmox if the guest watchdog timer expires."
+    },
+    "startup_order": {
+      "type": "string",
+      "title": "Startup / Shutdown Order",
+      "description": "Optional Proxmox startup/shutdown order string (e.g. 'order=1,up=30,down=60' so Control Plane nodes boot before Workers)."
     },
     "vga": {
       "type": "string",
-      "description": "Proxmox display adapter, for example 'std' or 'none'."
-    },
-    "numa": {
-      "type": "boolean",
-      "description": "Enable NUMA topology for better memory locality on multi-socket systems"
-    },
-    "hugepages": {
-      "type": "string",
+      "title": "Display Adapter (VGA)",
+      "default": "std",
       "enum": [
-        "2MB",
-        "1GB"
+        "std",
+        "virtio",
+        "virtio-gl",
+        "qxl",
+        "serial0",
+        "none",
+        "cirrus",
+        "vmware"
       ],
-      "description": "Enable hugepages for reduced TLB misses. Use '1GB' for GPU/HPC workloads"
+      "description": "Proxmox display adapter, for example 'std', 'virtio', or 'none'."
     },
-    "balloon": {
+    "serial_console": {
       "type": "boolean",
-      "description": "Enable memory ballooning. Set to false for GPU passthrough or hugepages"
+      "title": "Serial Console (serial0)",
+      "default": false,
+      "description": "Attach a virtual serial console socket (serial0=socket) for Proxmox xterm.js terminal and kernel console logging."
     },
-    "pool": {
+    "onboot": {
+      "type": "boolean",
+      "title": "Start on Node Boot",
+      "default": true,
+      "description": "Automatically start the VM when the Proxmox host node boots."
+    },
+    "protection": {
+      "type": "boolean",
+      "title": "VM Protection Mode",
+      "default": false,
+      "description": "Set the protection flag in Proxmox to prevent accidental manual VM removal in the Proxmox UI."
+    },
+    "description": {
       "type": "string",
-      "description": "Proxmox resource pool"
+      "title": "VM Description / Notes",
+      "description": "Optional description/notes shown in the Proxmox VM Summary panel."
     },
     "tags": {
       "type": "array",
+      "title": "Proxmox VM Tags",
       "items": {
         "type": "string",
         "minLength": 1
@@ -138,41 +885,56 @@
     },
     "ha": {
       "type": "object",
-      "title": "High Availability",
-      "description": "Register the VM as a Proxmox HA resource. When set, the provider stops picking nodes for this machine set; Proxmox HA owns placement. Requires Proxmox VE 9+.",
+      "title": "High Availability (Proxmox HA)",
+      "description": "Register the VM as a Proxmox HA resource. Supports both Proxmox VE 7/8 HA Groups ('group') and Proxmox VE 9+ HA Affinity Rules ('rules', 'node_affinity_nodes', 'resource_affinity').",
       "properties": {
         "state": {
           "type": "string",
+          "title": "HA Target State",
+          "default": "started",
           "enum": [
             "started",
             "stopped",
             "disabled",
             "ignored"
           ],
-          "description": "HA target state (default: started). The ha fields are reconciled on every provision, so a later edit takes effect. 'started': VM runs and HA restarts it on failure. 'stopped': stopped but HA-managed. 'disabled': resource defined, HA ignores it. 'ignored': removed from HA management."
+          "description": "HA target state (default: started). Reconciled on every update."
+        },
+        "group": {
+          "type": "string",
+          "title": "Proxmox HA Group (PVE 7/8/9)",
+          "description": "Optional Proxmox HA Group name (loaded from /cluster/ha/groups in your Proxmox cluster)."
         },
         "comment": {
           "type": "string",
+          "title": "HA Comment",
           "maxLength": 4096,
           "description": "Human-readable comment on the HA resource."
         },
         "max_restart": {
           "type": "integer",
+          "title": "Max Restarts",
+          "default": 2,
           "minimum": 0,
           "description": "Max restart attempts on the current node (Proxmox default: 1)."
         },
         "max_relocate": {
           "type": "integer",
+          "title": "Max Relocates",
+          "default": 2,
           "minimum": 0,
           "description": "Max relocate attempts once restarts are exhausted (Proxmox default: 1)."
         },
         "failback": {
           "type": "boolean",
+          "title": "Failback to Preferred Node",
+          "default": true,
           "description": "When true, HA returns the VM to its preferred node once that node is back online."
         },
         "rules": {
           "type": "array",
-          "description": "Proxmox HA rule names to add the VM to (Proxmox 9+; alphanumeric, dash and underscore). A VM may belong to multiple rules.",
+          "title": "HA Rules (Proxmox 9+)",
+          "description": "Proxmox HA rule names to add the VM to (loaded from /cluster/ha/rules in your Proxmox cluster).",
           "items": {
             "type": "string",
             "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]*$",
@@ -181,7 +943,8 @@
         },
         "node_affinity_nodes": {
           "type": "array",
-          "description": "List of Proxmox node names used as the auto-managed node-affinity target set. The provider derives a per-machine-class node-affinity rule from this list; it is independent of the user-supplied 'rules' field. Applied when the rule is first created; later edits to the node set are ignored (change the rule in the Proxmox UI or pvesh).",
+          "title": "Node Affinity Target Nodes (Proxmox 9+)",
+          "description": "List of Proxmox node names used as the auto-managed node-affinity target set. Automatically populated from 'node_group' when 'node_group' is selected.",
           "items": {
             "type": "string",
             "pattern": "^[A-Za-z0-9][A-Za-z0-9-]*$",
@@ -190,36 +953,93 @@
         },
         "node_affinity_strict": {
           "type": "boolean",
-          "description": "When true, mark the auto-managed node-affinity rule as strict, so the HA manager will never run VMs outside the configured node set. Defaults to false (soft affinity). Applies only to the rule derived from 'node_affinity_nodes', not to entries in 'rules'. Applied when the rule is first created; later edits are ignored."
+          "title": "Strict Node Affinity",
+          "default": false,
+          "description": "When true, mark the auto-managed node-affinity rule as strict, so the HA manager will never run VMs outside the configured node set."
         },
         "resource_affinity": {
           "type": "string",
+          "title": "Resource Affinity (Spread / Colocate)",
           "enum": [
             "negative",
             "positive"
           ],
-          "description": "Resource affinity direction for the HA rule. 'negative' spreads VMs across nodes; 'positive' colocates them. Applied when the rule is first created; later edits to the direction are ignored (change the rule in the Proxmox UI or pvesh)."
+          "description": "Resource affinity direction for the HA rule. 'negative' spreads VMs across different nodes (anti-affinity); 'positive' keeps them together."
         }
       }
     },
     "additional_nics": {
       "type": "array",
-      "description": "Additional network interfaces (e.g., for storage networks)",
+      "title": "Additional Network Interfaces (Legacy)",
+      "description": "Additional network interfaces appended after the primary NIC or 'nics' list.",
       "items": {
         "type": "object",
         "properties": {
           "bridge": {
             "type": "string",
+            "title": "Network Bridge",
             "description": "Network bridge (e.g., vmbr1)"
+          },
+          "model": {
+            "type": "string",
+            "title": "NIC Model",
+            "default": "virtio",
+            "enum": [
+              "virtio",
+              "e1000",
+              "e1000e",
+              "vmxnet3",
+              "rtl8139"
+            ],
+            "description": "Virtual NIC model"
           },
           "vlan": {
             "type": "integer",
+            "title": "VLAN Tag",
             "minimum": 0,
+            "maximum": 4094,
             "description": "Optional VLAN tag"
           },
           "firewall": {
             "type": "boolean",
+            "title": "Firewall",
             "description": "Enable Proxmox firewall for this NIC"
+          },
+          "mtu": {
+            "type": "integer",
+            "title": "MTU",
+            "minimum": 1,
+            "maximum": 65520,
+            "description": "Optional MTU"
+          },
+          "queues": {
+            "type": "integer",
+            "title": "Multiqueue",
+            "minimum": 1,
+            "maximum": 64,
+            "description": "Optional VirtIO multiqueue count"
+          },
+          "rate_limit": {
+            "type": "number",
+            "title": "Rate Limit (MB/s)",
+            "minimum": 0,
+            "description": "Optional bandwidth limit in MB/s"
+          },
+          "ip_pool": {
+            "type": "string",
+            "title": "Static IP Pool / Range",
+            "description": "Optional IP range with CIDR prefix (e.g. '10.0.20.100-10.0.20.150/24')"
+          },
+          "addresses": {
+            "type": "array",
+            "title": "Static IP Addresses (CIDR)",
+            "items": {
+              "type": "string"
+            }
+          },
+          "gateway4": {
+            "type": "string",
+            "title": "IPv4 Gateway"
           }
         },
         "required": [
@@ -227,89 +1047,47 @@
         ]
       }
     },
-    "usb_devices": {
-      "type": "array",
-      "maxItems": 15,
-      "description": "USB devices to pass through using Proxmox Resource Mappings (usb0, usb1, etc.)",
-      "items": {
-        "type": "object",
-        "properties": {
-          "mapping": {
-            "type": "string",
-            "minLength": 1,
-            "description": "Proxmox USB Resource Mapping name (e.g., rtl-sdr)"
-          },
-          "usb3": {
-            "type": "boolean",
-            "description": "Attach the device to the USB 3 controller"
-          }
-        },
-        "required": [
-          "mapping"
-        ]
-      }
-    },
-    "pci_devices": {
-      "type": "array",
-      "description": "PCI devices to pass through using Proxmox Resource Mappings",
-      "items": {
-        "type": "object",
-        "properties": {
-          "mapping": {
-            "type": "string",
-            "description": "Proxmox Resource Mapping name (e.g., nvidia-gpu-1)"
-          },
-          "mdev": {
-            "type": "string",
-            "description": "Proxmox Mediated Device name (e.g., nvidia-180)"
-          },
-          "pcie": {
-            "type": "boolean",
-            "description": "Use PCIe mode instead of PCI (recommended for GPUs)"
-          },
-          "primary_gpu": {
-            "type": "boolean",
-            "description": "Set as primary GPU (x-vga=1) for display output"
-          },
-          "rombar": {
-            "type": "boolean",
-            "description": "Enable ROM BAR for device ROM"
-          }
-        },
-        "required": [
-          "mapping"
-        ]
-      }
-    },
     "additional_disks": {
       "type": "array",
-      "description": "Additional disks to attach to the VM (scsi1, scsi2, etc.)",
+      "title": "Additional Disks (Legacy)",
+      "description": "Additional disks to attach to the VM (scsi1, scsi2, etc.). Prefer using the unified 'disks' list above.",
       "items": {
         "type": "object",
         "properties": {
           "disk_size": {
             "type": "integer",
+            "title": "Disk Size (GB)",
             "minimum": 1,
             "description": "Disk size in GB"
           },
+          "storage": {
+            "type": "string",
+            "title": "Storage Pool",
+            "description": "Proxmox storage pool for this disk"
+          },
           "storage_selector": {
             "type": "string",
-            "description": "CEL expression for selecting VM disk image storage for this disk"
+            "title": "Storage Selector (CEL)",
+            "description": "CEL expression or storage name for selecting VM disk storage for this disk"
           },
           "disk_ssd": {
             "type": "boolean",
+            "title": "SSD Emulation",
             "description": "Enable SSD emulation for this disk"
           },
           "disk_discard": {
             "type": "boolean",
+            "title": "TRIM / Discard",
             "description": "Enable TRIM/discard support for this disk"
           },
           "disk_iothread": {
             "type": "boolean",
+            "title": "IO Thread",
             "description": "Enable dedicated IO thread for this disk"
           },
           "disk_cache": {
             "type": "string",
+            "title": "Cache Mode",
             "enum": [
               "none",
               "writethrough",
@@ -321,6 +1099,7 @@
           },
           "disk_aio": {
             "type": "string",
+            "title": "Async IO",
             "enum": [
               "native",
               "threads",
@@ -330,16 +1109,82 @@
           }
         },
         "required": [
-          "disk_size",
-          "storage_selector"
+          "disk_size"
+        ]
+      }
+    },
+    "usb_devices": {
+      "type": "array",
+      "title": "USB Device Passthrough (Add / Remove)",
+      "maxItems": 15,
+      "description": "USB devices to pass through using Proxmox Resource Mappings (usb0, usb1, etc.)",
+      "items": {
+        "type": "object",
+        "title": "USB Device",
+        "properties": {
+          "mapping": {
+            "type": "string",
+            "title": "USB Resource Mapping",
+            "minLength": 1,
+            "description": "Proxmox USB Resource Mapping name (loaded from your Proxmox cluster)"
+          },
+          "usb3": {
+            "type": "boolean",
+            "title": "USB 3.0 Controller",
+            "default": true,
+            "description": "Attach the device to the USB 3 controller"
+          }
+        },
+        "required": [
+          "mapping"
+        ]
+      }
+    },
+    "pci_devices": {
+      "type": "array",
+      "title": "PCI / GPU Device Passthrough (Add / Remove)",
+      "description": "PCI devices to pass through using Proxmox Resource Mappings (hostpci0, hostpci1, etc.)",
+      "items": {
+        "type": "object",
+        "title": "PCI Device",
+        "properties": {
+          "mapping": {
+            "type": "string",
+            "title": "PCI Resource Mapping",
+            "description": "Proxmox PCI Resource Mapping name (loaded from your Proxmox cluster)"
+          },
+          "mdev": {
+            "type": "string",
+            "title": "Mediated Device (vGPU / MDev)",
+            "description": "Proxmox Mediated Device name (e.g., nvidia-180)"
+          },
+          "pcie": {
+            "type": "boolean",
+            "title": "PCI Express (PCIe)",
+            "default": true,
+            "description": "Use PCIe mode instead of PCI (recommended for GPUs, requires machine_type='q35')"
+          },
+          "primary_gpu": {
+            "type": "boolean",
+            "title": "Primary GPU (x-vga)",
+            "default": false,
+            "description": "Set as primary GPU (x-vga=1) for display output"
+          },
+          "rombar": {
+            "type": "boolean",
+            "title": "ROM BAR",
+            "default": true,
+            "description": "Enable ROM BAR for device ROM"
+          }
+        },
+        "required": [
+          "mapping"
         ]
       }
     }
   },
   "required": [
     "cores",
-    "memory",
-    "disk_size",
-    "storage_selector"
+    "memory"
   ]
 }
