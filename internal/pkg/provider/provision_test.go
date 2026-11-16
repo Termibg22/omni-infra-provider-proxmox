@@ -800,7 +800,7 @@ func TestDiscoverClusterOptionsAgainstMockProxmox(t *testing.T) {
 	})
 	mux.HandleFunc("/nodes/pve1/storage", func(w http.ResponseWriter, _ *http.Request) {
 		writeJSON(w, []map[string]any{
-			{"storage": "local-lvm", "content": "images", "enabled": 1},
+			{"storage": "local-lvm", "content": "images", "active": 1, "enabled": 1},
 			{"storage": "disabled-store", "content": "images", "enabled": 0},
 		})
 	})
@@ -847,9 +847,9 @@ func TestDiscoverClusterOptionsAgainstMockProxmox(t *testing.T) {
 	opts := provider.DiscoverClusterOptions(context.Background(), proxmox.NewClient(srv.URL), zap.NewNop(), map[string][]string{
 		"rack-a": {"pve1"},
 	})
-	require.Equal(t, []string{"pve1", "pve2"}, opts.Nodes)
-	require.Equal(t, []string{"ceph-rbd", "local-lvm"}, opts.DiskStorages)
-	require.Equal(t, []string{"cephfs-iso"}, opts.ISOStorages)
+	require.Equal(t, []string{"pve1"}, opts.Nodes)
+	require.Equal(t, []string{"local-lvm"}, opts.DiskStorages)
+	require.Empty(t, opts.ISOStorages)
 	require.Equal(t, []string{"vmbr0", "vnet-k8s"}, opts.NetworkBridges)
 	require.Equal(t, []string{"talos-prod"}, opts.Pools)
 	require.Equal(t, []string{"gpu-rtx4090"}, opts.PCIMappings)
@@ -1058,8 +1058,8 @@ func TestReconcileExistingMachineUpdatesDisksNICsAndMigratesNodeGroup(t *testing
 	})
 	mux.HandleFunc("/nodes/pve2/storage", func(w http.ResponseWriter, _ *http.Request) {
 		writeJSON(w, []map[string]any{
-			{"storage": "local-lvm", "content": "images", "enabled": 1},
-			{"storage": "ceph-rbd", "content": "images", "enabled": 1},
+			{"storage": "local-lvm", "content": "images", "active": 1, "enabled": 1},
+			{"storage": "ceph-rbd", "content": "images", "active": 1, "enabled": 1},
 		})
 	})
 	mux.HandleFunc("/nodes/pve2/qemu/100/firewall/rules", func(w http.ResponseWriter, r *http.Request) {

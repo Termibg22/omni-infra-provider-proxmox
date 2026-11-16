@@ -395,6 +395,10 @@ func (d *Data) normalizeSentinels() {
 		d.Disks[i].Storage = stripSentinel(d.Disks[i].Storage)
 	}
 
+	for i := range d.AdditionalDisks {
+		d.AdditionalDisks[i].Storage = stripSentinel(d.AdditionalDisks[i].Storage)
+	}
+
 	if d.Replication != nil {
 		d.Replication.TargetNode = stripSentinel(d.Replication.TargetNode)
 	}

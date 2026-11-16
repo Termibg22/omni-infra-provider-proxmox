@@ -44,20 +44,21 @@ type NodeTopology struct {
 // ClusterOptions holds the real resources and per-node/per-group topology discovered from a Proxmox cluster
 // used to populate enum selectors and cascading dependencies in the Omni UI JSON Schema.
 type ClusterOptions struct {
-	NodeGroups     map[string][]string
-	NodeTopologies map[string]NodeTopology
-	Nodes          []string
-	DiskStorages   []string
-	ISOStorages    []string
-	NetworkBridges []string
-	Pools          []string
-	PCIMappings    []string
-	USBMappings    []string
-	HARules        []string
-	HAGroups       []string
-	CPUTypes       []string
-	SecurityGroups []string
-	Templates      []string
+	NodeTopologies    map[string]NodeTopology
+	NodeGroups        map[string][]string
+	NetworkBridges    []string
+	Nodes             []string
+	DiskStorages      []string
+	ISOStorages       []string
+	Pools             []string
+	PCIMappings       []string
+	USBMappings       []string
+	HARules           []string
+	HAGroups          []string
+	CPUTypes          []string
+	SecurityGroups    []string
+	Templates         []string
+	DiscoveryComplete bool
 }
 
 // TopologyForNodes merges the capabilities (storages, bridges, PCI/USB mappings) available across the given node names.
@@ -160,6 +161,11 @@ func StartSchemaRefresher(ctx context.Context, cfg SchemaRefresherConfig) {
 				return
 			case <-ticker.C:
 				opts := DiscoverClusterOptions(ctx, cfg.ProxmoxClient, logger, cfg.CustomNodeGroups)
+				if !opts.DiscoveryComplete {
+					logger.Warn("skipping schema refresh after incomplete node/storage discovery")
+
+					continue
+				}
 
 				newSchema, err := BuildDynamicSchema(cfg.BaseSchema, opts)
 				if err != nil {
@@ -218,22 +224,23 @@ type nodeTopologySets struct {
 }
 
 type discoveryAccumulator struct {
-	nodesSet       map[string]struct{}
-	diskStorageSet map[string]struct{}
-	isoStorageSet  map[string]struct{}
-	bridgeSet      map[string]struct{}
-	poolSet        map[string]struct{}
-	pciSet         map[string]struct{}
-	usbSet         map[string]struct{}
-	haRuleSet      map[string]struct{}
-	haGroupSet     map[string]struct{}
-	cpuModelSet    map[string]struct{}
-	secGroupSet    map[string]struct{}
-	templateSet    map[string]struct{}
-	nodeGroups     map[string][]string
-	perNode        map[string]*nodeTopologySets
-	sdnZoneNodes   map[string][]string
-	cpuTypes       []string
+	nodesSet          map[string]struct{}
+	diskStorageSet    map[string]struct{}
+	isoStorageSet     map[string]struct{}
+	bridgeSet         map[string]struct{}
+	poolSet           map[string]struct{}
+	pciSet            map[string]struct{}
+	usbSet            map[string]struct{}
+	haRuleSet         map[string]struct{}
+	haGroupSet        map[string]struct{}
+	cpuModelSet       map[string]struct{}
+	secGroupSet       map[string]struct{}
+	templateSet       map[string]struct{}
+	nodeGroups        map[string][]string
+	perNode           map[string]*nodeTopologySets
+	sdnZoneNodes      map[string][]string
+	cpuTypes          []string
+	discoveryComplete bool
 }
 
 func newDiscoveryAccumulator(customGroups map[string][]string) *discoveryAccumulator {
@@ -271,8 +278,6 @@ func (a *discoveryAccumulator) ensureNode(nodeName string) *nodeTopologySets {
 	if nodeName == "" {
 		return nil
 	}
-
-	a.nodesSet[nodeName] = struct{}{}
 
 	nt, ok := a.perNode[nodeName]
 	if !ok {
@@ -339,6 +344,13 @@ func DiscoverClusterOptions(ctx context.Context, px *proxmox.Client, logger *zap
 	acc.discoverClusterMappingsAndModels(ctx, cluster)
 
 	opts := acc.buildOptions()
+	if !opts.DiscoveryComplete {
+		opts.Nodes = nil
+		opts.NodeGroups = nil
+		opts.NodeTopologies = nil
+		opts.DiskStorages = nil
+		opts.ISOStorages = nil
+	}
 
 	logger.Info("discovered Proxmox cluster options for UI schema",
 		zap.Strings("nodes", opts.Nodes),
@@ -362,6 +374,10 @@ func (a *discoveryAccumulator) buildOptions() ClusterOptions {
 	nodeTopologies := make(map[string]NodeTopology, len(a.perNode))
 
 	for nodeName, nt := range a.perNode {
+		if _, current := a.nodesSet[nodeName]; !current {
+			continue
+		}
+
 		nodeTopologies[nodeName] = NodeTopology{
 			DiskStorages:   slices.Sorted(maps.Keys(nt.diskStorages)),
 			ISOStorages:    slices.Sorted(maps.Keys(nt.isoStorages)),
@@ -371,21 +387,32 @@ func (a *discoveryAccumulator) buildOptions() ClusterOptions {
 		}
 	}
 
+	groups := map[string][]string{}
+
+	for name, members := range a.nodeGroups {
+		for _, member := range members {
+			if _, exists := a.nodesSet[member]; exists {
+				groups[name] = append(groups[name], member)
+			}
+		}
+	}
+
 	return ClusterOptions{
-		Nodes:          allNodes,
-		NodeGroups:     a.nodeGroups,
-		NodeTopologies: nodeTopologies,
-		DiskStorages:   slices.Sorted(maps.Keys(a.diskStorageSet)),
-		ISOStorages:    slices.Sorted(maps.Keys(a.isoStorageSet)),
-		NetworkBridges: slices.Sorted(maps.Keys(a.bridgeSet)),
-		Pools:          slices.Sorted(maps.Keys(a.poolSet)),
-		PCIMappings:    slices.Sorted(maps.Keys(a.pciSet)),
-		USBMappings:    slices.Sorted(maps.Keys(a.usbSet)),
-		HARules:        slices.Sorted(maps.Keys(a.haRuleSet)),
-		HAGroups:       slices.Sorted(maps.Keys(a.haGroupSet)),
-		SecurityGroups: slices.Sorted(maps.Keys(a.secGroupSet)),
-		Templates:      slices.Sorted(maps.Keys(a.templateSet)),
-		CPUTypes:       a.cpuTypes,
+		DiscoveryComplete: a.discoveryComplete,
+		Nodes:             allNodes,
+		NodeGroups:        groups,
+		NodeTopologies:    nodeTopologies,
+		DiskStorages:      slices.Sorted(maps.Keys(a.diskStorageSet)),
+		ISOStorages:       slices.Sorted(maps.Keys(a.isoStorageSet)),
+		NetworkBridges:    slices.Sorted(maps.Keys(a.bridgeSet)),
+		Pools:             slices.Sorted(maps.Keys(a.poolSet)),
+		PCIMappings:       slices.Sorted(maps.Keys(a.pciSet)),
+		USBMappings:       slices.Sorted(maps.Keys(a.usbSet)),
+		HARules:           slices.Sorted(maps.Keys(a.haRuleSet)),
+		HAGroups:          slices.Sorted(maps.Keys(a.haGroupSet)),
+		SecurityGroups:    slices.Sorted(maps.Keys(a.secGroupSet)),
+		Templates:         slices.Sorted(maps.Keys(a.templateSet)),
+		CPUTypes:          a.cpuTypes,
 	}
 }
 
@@ -407,6 +434,10 @@ func (a *discoveryAccumulator) discoverFromClusterResources(ctx context.Context,
 func (a *discoveryAccumulator) recordClusterResource(res *proxmox.ClusterResource) {
 	switch res.Type {
 	case "node":
+		if res.Node != "" {
+			a.nodesSet[res.Node] = struct{}{}
+		}
+
 		a.ensureNode(res.Node)
 	case "pool":
 		if res.Pool != "" {
@@ -484,11 +515,18 @@ func (a *discoveryAccumulator) discoverFromNodes(ctx context.Context, px *proxmo
 		return
 	}
 
+	a.nodesSet = map[string]struct{}{}
+	a.diskStorageSet = map[string]struct{}{}
+	a.isoStorageSet = map[string]struct{}{}
+	a.perNode = map[string]*nodeTopologySets{}
+	a.discoveryComplete = true
+
 	for _, ns := range nodes {
 		if ns == nil || ns.Node == "" {
 			continue
 		}
 
+		a.nodesSet[ns.Node] = struct{}{}
 		a.ensureNode(ns.Node)
 
 		if ns.Status != "online" {
@@ -499,23 +537,30 @@ func (a *discoveryAccumulator) discoverFromNodes(ctx context.Context, px *proxmo
 		if nodeErr != nil {
 			logger.Debug("failed to get node during schema discovery", zap.String("node", ns.Node), zap.Error(nodeErr))
 
+			a.discoveryComplete = false
+
 			continue
 		}
 
-		a.discoverSingleNode(ctx, node)
+		if !a.discoverSingleNode(ctx, node) {
+			a.discoveryComplete = false
+		}
 	}
 }
 
-func (a *discoveryAccumulator) discoverSingleNode(ctx context.Context, node *proxmox.Node) {
+func (a *discoveryAccumulator) discoverSingleNode(ctx context.Context, node *proxmox.Node) bool {
+	complete := true
 	nt := a.ensureNode(node.Name)
 
 	if nodeStorages, err := node.Storages(ctx); err == nil {
 		for _, st := range nodeStorages {
-			if st != nil && st.Name != "" && st.Enabled != 0 {
+			if st != nil && st.Name != "" && st.Enabled != 0 && st.Active != 0 {
 				classifyStorageContent(st.Name, st.Content, a.diskStorageSet, a.isoStorageSet)
 				classifyStorageContent(st.Name, st.Content, nt.diskStorages, nt.isoStorages)
 			}
 		}
+	} else {
+		complete = false
 	}
 
 	if networks, err := node.Networks(ctx); err == nil {
@@ -530,6 +575,8 @@ func (a *discoveryAccumulator) discoverSingleNode(ctx context.Context, node *pro
 			}
 		}
 	}
+
+	return complete
 }
 
 func (a *discoveryAccumulator) discoverClusterMappingsAndModels(ctx context.Context, cluster *proxmox.Cluster) {
@@ -716,7 +763,7 @@ func (a *discoveryAccumulator) discoverHAGroupsAndRules(ctx context.Context, clu
 func classifyStorageContent(name, content string, diskStorages, isoStorages map[string]struct{}) {
 	for part := range strings.SplitSeq(content, ",") {
 		switch strings.TrimSpace(part) {
-		case "images", "rootdir":
+		case "images":
 			diskStorages[name] = struct{}{}
 		case "iso":
 			isoStorages[name] = struct{}{}
@@ -739,22 +786,24 @@ func BuildDynamicSchema(baseSchema string, opts ClusterOptions) (string, error) 
 	}
 
 	groupNames := slices.Sorted(maps.Keys(opts.NodeGroups))
+	setEnum(props, "storage", withSentinelOption("auto", opts.DiskStorages), "auto")
+	setEnum(props, "network_bridge", opts.NetworkBridges, pickDefaultBridge(opts.NetworkBridges))
 
 	// 01. General
-	if genProps := nestedProperties(props, "general"); genProps != nil {
+	if genProps := sectionOrRoot(props, "general"); genProps != nil {
 		setEnum(genProps, "node_group", withSentinelOption("auto", groupNames), "auto")
 		setEnum(genProps, "node", withSentinelOption("auto", opts.Nodes), "auto")
 		setEnum(genProps, "pool", withSentinelOption("auto", opts.Pools), "auto")
 	}
 
 	// 02. OS & Provisioning
-	if osProps := nestedProperties(props, "os"); osProps != nil {
+	if osProps := sectionOrRoot(props, "os"); osProps != nil {
 		setEnum(osProps, "iso_storage", withSentinelOption("auto", opts.ISOStorages), "auto")
 		setEnum(osProps, "template_vmid", withSentinelOption("none", opts.Templates), "none")
 	}
 
 	// 04. CPU & Memory
-	if compProps := nestedProperties(props, "compute"); compProps != nil && len(opts.CPUTypes) > 0 {
+	if compProps := sectionOrRoot(props, "compute"); compProps != nil && len(opts.CPUTypes) > 0 {
 		setEnum(compProps, "cpu_type", opts.CPUTypes, "x86-64-v2-AES")
 	}
 
@@ -766,11 +815,14 @@ func BuildDynamicSchema(baseSchema string, opts ClusterOptions) (string, error) 
 		withSentinelOption("auto", opts.DiskStorages),
 		"auto",
 	)
+	setArrayObjectPropertyEnum(props, "additional_disks", "storage", withSentinelOption("auto", opts.DiskStorages), "auto")
 
 	// 06. Network
-	if netProps := nestedProperties(props, "network"); netProps != nil {
+	if netProps := sectionOrRoot(props, "network"); netProps != nil {
 		setArrayObjectPropertyEnum(netProps, "nics", "bridge", opts.NetworkBridges, pickDefaultBridge(opts.NetworkBridges))
 	}
+
+	setArrayObjectPropertyEnum(props, "additional_nics", "bridge", opts.NetworkBridges, pickDefaultBridge(opts.NetworkBridges))
 
 	// 07. High Availability
 	setNestedArrayItemEnum(props, "ha", "node_affinity_nodes", opts.Nodes)
@@ -781,12 +833,12 @@ func BuildDynamicSchema(baseSchema string, opts ClusterOptions) (string, error) 
 	setNestedPropertyEnum(props, "replication", "target_node", withSentinelOption("auto", opts.Nodes), "auto")
 
 	// 09. Firewall & Security
-	if fwProps := nestedProperties(props, "firewall"); fwProps != nil {
+	if fwProps := sectionOrRoot(props, "firewall"); fwProps != nil {
 		setTopLevelArrayItemEnum(fwProps, "security_groups", opts.SecurityGroups)
 	}
 
 	// 10. Hardware Passthrough
-	if ptProps := nestedProperties(props, "passthrough"); ptProps != nil {
+	if ptProps := sectionOrRoot(props, "passthrough"); ptProps != nil {
 		setArrayObjectPropertyEnum(ptProps, "pci_devices", "mapping", opts.PCIMappings, firstOrEmpty(opts.PCIMappings))
 		setArrayObjectPropertyEnum(ptProps, "usb_devices", "mapping", opts.USBMappings, firstOrEmpty(opts.USBMappings))
 	}
@@ -939,4 +991,12 @@ func pickDefaultBridge(bridges []string) string {
 	}
 
 	return firstOrEmpty(bridges)
+}
+
+func sectionOrRoot(props map[string]any, section string) map[string]any {
+	if nested := nestedProperties(props, section); nested != nil {
+		return nested
+	}
+
+	return props
 }

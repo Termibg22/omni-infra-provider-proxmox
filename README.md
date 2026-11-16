@@ -33,11 +33,11 @@ Despite its historical name, `OMNI_SERVICE_ACCOUNT_KEY` must contain an **infras
 docker run -d --name omni-proxmox --restart unless-stopped \
   --mount type=bind,source="$(pwd)/config.yaml",target=/config.yaml,readonly \
   -e OMNI_ENDPOINT -e OMNI_SERVICE_ACCOUNT_KEY \
-  ghcr.io/termibg22/omni-infra-provider-proxmox:v4.1.1 \
+  ghcr.io/termibg22/omni-infra-provider-proxmox:v4.1.2 \
   --config-file /config.yaml
 ```
 
-`v4.1.1` includes the reviewed usability and reliability changes described below.
+`v4.1.2` restores compatibility with existing flat Machine Class data and fixes node/storage discovery. It works with unmodified Omni.
 Do not use `latest` to pin a production deployment.
 
 ## Create a Machine Class
@@ -46,21 +46,29 @@ In Omni, create an **Auto Provision** Machine Class and select the Proxmox provi
 For ordinary DHCP machines, the provider defaults to 2 cores, 4096 MB RAM, a 20 GB SCSI boot disk, and a VirtIO NIC on `vmbr0`.
 Select a storage and bridge that exist on every eligible target node, or constrain placement with a node/group.
 
-The provider data accepts grouped UI fields and legacy flat YAML:
+The form uses flat fields so previously saved CPU, memory, boot disk and primary NIC values remain visible.
+For a normal VM, use the boot disk and primary network controls. Empty complete-device lists retain those devices.
+Grouped v4 YAML remains accepted by the provider, but the flat form cannot display values stored only inside those old groups; edit such manifests with `omnictl`.
 
 ```yaml
-compute:
-  cores: 4
-  memory: 8192
+cores: 4
+memory: 8192
+disk_size: 40
+storage: local-zfs
+network_bridge: vmbr0
+```
 
+For per-device tuning, the optional `disks` and `nics` arrays replace the boot disk and primary NIC controls:
+
+```yaml
+cores: 4
+memory: 8192
 disks:
-  - storage: local-lvm
+  - storage: local-zfs
     size: 40
-
-network:
-  nics:
-    - bridge: vmbr0
-      vlan: 100
+nics:
+  - bridge: vmbr0
+    vlan: 100
 ```
 
 The first disk is the boot disk.
@@ -88,17 +96,26 @@ spec:
 
 Apply it with `omnictl apply -f machine-class.yaml`, then select the class when configuring a cluster's machine sets.
 
-## Form detail and updates (v4.1.1)
+## Form compatibility and updates (v4.1.2)
 
-The default form shows four sections: General, CPU & Memory, Disks, and Network.
-Use `--schema-mode advanced` to expose firmware, cloning, HA, replication, firewall, bonding, passthrough, QoS, DNS, and static IP configuration.
-Switching form modes preserves advanced fields already present in provider data.
-The mode is a provider startup setting, shared by users of that provider.
-Omni controls the form renderer; this repository cannot add client-side tabs or conditional dropdowns to it.
+All advanced settings are exposed in both schema modes. `--schema-mode` remains accepted for compatibility.
+The hosted Omni renderer generates its own layout and ignores provider-supplied tabs and JSON Schema defaults.
+This release uses its existing controls, with full profile help in the question-mark tooltip.
+Blank placement fields mean `auto`; omitted or zero CPU/RAM values use 2 cores and 4096 MiB. Saved nonzero values are displayed directly.
+Numeric limits live in validation subschemas to avoid Omni 1.13.3 converting missing values to NaN/null on mount.
+
+Node choices come from the current `/nodes` inventory. Disk destinations require `enabled=1`, `active=1` and `images` in their per-node content list.
+A `rootdir`-only storage supports containers, not VM disks, and is excluded. Stale references in config, HA or mappings do not create selectable nodes.
+Incomplete node/storage refreshes keep the last complete schema.
+Choices describe the cluster as a whole; constrain placement when a resource is available on only some nodes.
+
+Browser reloads discard unsaved changes in hosted Omni. The provider cannot access browser drafts or change this behavior.
+Save the class before reloading, or edit an exported manifest locally with `omnictl`; the provider does not silently rewrite Machine Classes.
+See [EDITOR_FIXES.md](EDITOR_FIXES.md) for the issue-by-issue scope and verification.
 
 | Flag | Default | Purpose |
 | --- | --- | --- |
-| `--schema-mode` | `basic` | `basic` or `advanced` form |
+| `--schema-mode` | `basic` | Compatibility flag; both values expose all settings |
 | `--schema-refresh-interval` | `2m` | Refresh discovered dropdown choices; `0` disables |
 | `--machineset-sync-interval` | `0` | Opt in to existing-VM updates, for example `30s` |
 | `--id` | `proxmox` | Infrastructure provider ID |
@@ -135,8 +152,18 @@ disks:
 A data disk's `volume_name` creates a Talos `UserVolumeConfig` mounted at `/var/mnt/<name>`, matching that disk's serial.
 Names use lowercase letters, digits and hyphens; names producing the same serial are rejected.
 Workload profiles supply defaults and extra Talos extensions; explicit YAML values, including `false`, take precedence.
-Profiles are `standard`, `control-plane`, `storage-node`, `gpu-ai-worker`, and `hardened-secure`.
-The control-plane profile enables Proxmox HA unless explicitly disabled with `ha: {state: none}`.
+Every profile keeps the same default CPU/RAM sizes. These defaults apply when provisioning new VMs; choosing a profile does not by itself reconfigure existing machines.
+
+| Profile | Defaults and implications |
+| --- | --- |
+| `standard` (also blank) | 2 cores, 1 socket, 4096 MiB RAM, 20 GiB boot disk, VirtIO NIC. No extra profile settings. |
+| `control-plane` | Startup `order=1,up=30`, i6300esb watchdog/reset, deletion protection, RNG, HA `started` with negative resource affinity. PVE 9+ affinity support required. Disable HA explicitly with `ha: {state: none}`. |
+| `storage-node` | `virtio-scsi-single`, cache `none`, AIO `io_uring`, SSD/TRIM/IO threads; adds `siderolabs/iscsi-tools` and `siderolabs/util-linux-tools`. |
+| `gpu-ai-worker` | `q35`, CPU `host`, OVMF, NUMA, ballooning off; adds NVIDIA production module/toolkit extensions. Select the PCI mapping separately. |
+| `hardened-secure` | OVMF, Secure Boot, TPM 2.0, deletion protection and RNG. Requires compatible signed Talos media. |
+
+The QEMU guest-agent Talos extension is always included. Explicit values, including `false`, take precedence over profile defaults.
+Profile disk tuning applies to the primary/unified disks; legacy `additional_disks` retain their explicitly supplied disk options.
 
 ### Static addresses, pools and bonds
 

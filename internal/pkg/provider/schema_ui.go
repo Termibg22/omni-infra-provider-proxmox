@@ -12,14 +12,12 @@ import (
 	"slices"
 )
 
-// BuildUISchema selects the fields exposed in Omni. Unknown properties remain
-// allowed so switching form detail preserves existing advanced and legacy YAML.
+// BuildUISchema retains every setting in both modes. Omni generates its own UI
+// and does not support provider-supplied tabs or local draft persistence.
+// Flat property names keep existing pre-v4 Machine Classes editable without a
+// server-side migration or changes to the provisioned VMs.
 func BuildUISchema(base, mode string) (string, error) {
-	if mode == "advanced" {
-		return base, nil
-	}
-
-	if mode != "basic" {
+	if mode != "basic" && mode != "advanced" {
 		return "", fmt.Errorf("schema-mode must be basic or advanced")
 	}
 
@@ -28,43 +26,11 @@ func BuildUISchema(base, mode string) (string, error) {
 		return "", err
 	}
 
-	props, ok := root["properties"].(map[string]any)
-	if !ok {
+	if _, ok := root["properties"].(map[string]any); !ok {
 		return "", fmt.Errorf("schema must contain an object of properties")
 	}
 
-	keepProperties(props, "general", "compute", "disks", "network")
-	keepProperties(nestedProperties(props, "general"), "workload_profile", "node_group", "node", "pool")
-	keepProperties(nestedProperties(props, "compute"), "cores", "memory")
-
-	if disks, ok := props["disks"].(map[string]any); ok {
-		if items, ok := disks["items"].(map[string]any); ok {
-			if fields, ok := items["properties"].(map[string]any); ok {
-				keepProperties(fields, "storage", "size")
-			}
-		}
-	}
-
-	network := nestedProperties(props, "network")
-	keepProperties(network, "nics")
-
-	if nics, ok := network["nics"].(map[string]any); ok {
-		if items, ok := nics["items"].(map[string]any); ok {
-			if fields, ok := items["properties"].(map[string]any); ok {
-				keepProperties(fields, "bridge", "vlan")
-			}
-		}
-	}
-
 	return marshalSchemaInOrder(root, []byte(base))
-}
-
-func keepProperties(props map[string]any, keep ...string) {
-	for name := range props {
-		if !slices.Contains(keep, name) {
-			delete(props, name)
-		}
-	}
 }
 
 // Omni generates its form in JSON property insertion order. encoding/json sorts

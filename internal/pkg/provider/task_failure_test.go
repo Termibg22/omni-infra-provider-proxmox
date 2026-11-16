@@ -109,7 +109,7 @@ func (f *fakeProxmox) handler() http.Handler {
 		f.writeData(w, f.addTask("qmconfig", "OK"))
 	})
 	mux.HandleFunc(fmt.Sprintf("/nodes/%s/storage", fakeNode), func(w http.ResponseWriter, _ *http.Request) {
-		f.writeData(w, []map[string]any{{"storage": "local", "content": "iso", "enabled": 1}})
+		f.writeData(w, []map[string]any{{"storage": "local", "content": "iso", "active": 1, "enabled": 1}})
 	})
 	mux.HandleFunc(fmt.Sprintf("/nodes/%s/storage/local/upload", fakeNode), func(w http.ResponseWriter, _ *http.Request) {
 		f.writeData(w, f.addTask("imgcopy", "OK"))

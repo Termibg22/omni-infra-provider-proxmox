@@ -51,23 +51,17 @@ func TestSchemaPreservesAuthoredOrderAndBasicFields(t *testing.T) {
 		require.NoError(t, err)
 		schema, err = BuildDynamicSchema(schema, ClusterOptions{DiskStorages: []string{"zfs", "local-lvm"}, Nodes: []string{"pve1"}, CPUTypes: DefaultCPUTypes})
 		require.NoError(t, err)
-		// Order is observable behavior in Omni, including object/array children.
-		require.Less(t, strings.Index(schema, `"general":`), strings.Index(schema, `"compute":`))
-		require.Less(t, strings.Index(schema, `"compute":`), strings.Index(schema, `"disks":`))
-		require.Less(t, strings.Index(schema, `"storage":`), strings.Index(schema, `"size":`))
+		require.Less(t, strings.Index(schema, `"cores":`), strings.Index(schema, `"memory":`))
 
 		var root map[string]any
 		require.NoError(t, json.Unmarshal([]byte(schema), &root))
-
 		props, ok := root["properties"].(map[string]any)
 		require.True(t, ok)
-
-		if mode == "basic" {
-			require.Len(t, props, 4)
-			require.Len(t, nestedProperties(props, "compute"), 2)
-		} else {
-			require.Len(t, props, 10)
-		}
+		require.Contains(t, props, "ha")
+		require.Contains(t, props, "bios")
+		require.Contains(t, props, "disk_size")
+		require.Contains(t, props, "network_bridge")
+		require.NotContains(t, root, "x-omni-uischema")
 
 		// Structure is checked by the schema tests.
 		storage := props["disks"].(map[string]any)["items"].(map[string]any)["properties"].(map[string]any)["storage"].(map[string]any) //nolint:errcheck,forcetypeassert
@@ -296,8 +290,10 @@ func TestProtectedMachineCanBeDeprovisioned(t *testing.T) {
 func TestStorageSelectorsRejectNonDiskStorage(t *testing.T) {
 	storages := proxmox.Storages{
 		&proxmox.Storage{Name: "disabled", Content: "images", Enabled: 0},
-		&proxmox.Storage{Name: "iso", Content: "iso", Enabled: 1},
-		&proxmox.Storage{Name: "disks", Content: "images", Enabled: 1},
+		&proxmox.Storage{Name: "inactive", Content: "images", Active: 0, Enabled: 1},
+		&proxmox.Storage{Name: "local-lvm", Content: "rootdir", Active: 1, Enabled: 1},
+		&proxmox.Storage{Name: "iso", Content: "iso", Active: 1, Enabled: 1},
+		&proxmox.Storage{Name: "disks", Content: "images", Active: 1, Enabled: 1},
 	}
 	for _, selector := range []string{"", `true`, `name == "disks"`, "disks"} {
 		got, err := matchStorage("pve1", storages, selector)
@@ -305,8 +301,10 @@ func TestStorageSelectorsRejectNonDiskStorage(t *testing.T) {
 		require.Equal(t, "disks", got)
 	}
 
-	_, err := matchStorage("pve1", storages, `name == "disabled"`)
-	require.Error(t, err)
+	for _, selector := range []string{`name == "disabled"`, `name == "inactive"`, `name == "local-lvm"`, "local-lvm"} {
+		_, err := matchStorage("pve1", storages, selector)
+		require.Error(t, err)
+	}
 }
 
 func TestInvalidBondAndVolumeConfigurationsFailBeforeProvisioning(t *testing.T) {
@@ -420,7 +418,7 @@ func TestClonedDiskConfigurationIsIdempotent(t *testing.T) {
 		case r.URL.Path == "/nodes/pve1/status":
 			respond(t, w, map[string]any{})
 		case strings.HasSuffix(r.URL.Path, "/storage"):
-			respond(t, w, []map[string]any{{"storage": "zfs", "content": "images", "enabled": 1}})
+			respond(t, w, []map[string]any{{"storage": "zfs", "content": "images", "active": 1, "enabled": 1}})
 		case strings.HasSuffix(r.URL.Path, "/config"):
 			var body map[string]any
 			require.NoError(t, json.NewDecoder(r.Body).Decode(&body))

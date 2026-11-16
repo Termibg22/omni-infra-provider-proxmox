@@ -6,6 +6,8 @@ Rama local: `codex/review-usability-bugfixes`.
 
 ## Resultado
 
+Actualización 4.1.2: las regresiones de compatibilidad del formulario y el inventario se documentan en [EDITOR_FIXES.md](EDITOR_FIXES.md). La solución entregada modifica exclusivamente el proveedor; no requiere parchear Omni.
+
 La revisión cubre configuración y CLI, esquema de Omni y descubrimiento, selección de nodos, asignación de VMIDs e IPs, aprovisionamiento y clonado, red, almacenamiento, HA, firewall, replicación, reconciliación, borrado, pruebas, documentación y publicación de contenedores.
 Los archivos protobuf generados se han tratado como artefactos derivados; no se han editado manualmente.
 
@@ -47,10 +49,10 @@ La publicación posterior se prepara como `v4.1.1`; no implica desplegarla sobre
 | P2 | Un mapeo PCI/USB incompatible con todos los nodos podía acabar eligiendo igualmente uno de ellos. | Error explícito cuando ningún candidato tiene todos los mapeos solicitados. |
 | P2 | Una tarea vacía podía provocar un panic al esperar su finalización. | Error verificable en lugar de desreferenciar un puntero nulo. |
 
-## Usabilidad y simplificación
+## Usabilidad y simplificación de la revisión inicial (4.1.1)
 
-- Formulario básico por defecto: General, CPU & Memory, Disks y Network.
-- Formulario completo disponible con `--schema-mode advanced`.
+- La revisión inicial redujo el formulario básico a cuatro secciones. Esta decisión se revierte en 4.1.2; véase [EDITOR_FIXES.md](EDITOR_FIXES.md).
+- En 4.1.2 ambos modos exponen todas las opciones para evitar ocultar configuración existente.
 - Orden del esquema original conservado también dentro de objetos y entradas de listas.
 - Eliminación de numeración y etiquetas recargadas.
 - Selección automática de almacenamiento por nodo, sin fijar como predeterminado el primer almacenamiento global descubierto.

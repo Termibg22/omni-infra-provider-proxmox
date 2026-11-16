@@ -2,191 +2,364 @@
   "type": "object",
   "title": "Proxmox VM Configuration",
   "properties": {
-    "general": {
-      "type": "object",
-      "title": "General",
-      "description": "VM placement, node group, workload preset, resource pool, tags, and boot behavior.",
-      "properties": {
-        "workload_profile": {
-          "type": "string",
-          "title": "Workload Profile",
-          "default": "standard",
-          "enum": [
-            "standard",
-            "control-plane",
-            "storage-node",
-            "gpu-ai-worker",
-            "hardened-secure"
-          ],
-          "description": "Optional defaults for a workload. Advanced settings expose the individual hardware and HA options."
-        },
-        "node_group": {
-          "type": "string",
-          "title": "Node Group",
-          "default": "auto",
-          "description": "Logical node group (auto-discovered from HA Groups, HA Rules, SDN Zones, PCI Groups, or config.yaml). Use 'auto' for all cluster nodes."
-        },
-        "node": {
-          "type": "string",
-          "title": "Target Node",
-          "default": "auto",
-          "description": "Specific Proxmox node, or 'auto' to use the placement strategy."
-        },
-        "placement_strategy": {
-          "type": "string",
-          "title": "Placement Strategy",
-          "default": "spread",
-          "enum": [
-            "spread",
-            "fewer-vms",
-            "round-robin",
-            "binpack"
-          ],
-          "description": "Auto-placement strategy when Target Node is 'auto'."
-        },
-        "pool": {
-          "type": "string",
-          "title": "Resource Pool",
-          "default": "auto",
-          "description": "Proxmox resource pool, or 'auto' to use the Omni MachineRequestSet ID."
-        },
-        "auto_create_pool": {
-          "type": "boolean",
-          "title": "Auto-Create Resource Pool",
-          "default": true,
-          "description": "Automatically create the specified Proxmox resource pool if it does not exist."
-        },
-        "tags": {
-          "type": "array",
-          "title": "VM Tags",
-          "items": {
-            "type": "string",
-            "minLength": 1
-          },
-          "description": "Proxmox VM tags"
-        },
-        "description": {
-          "type": "string",
-          "title": "Notes / Description",
-          "description": "Optional notes shown in the Proxmox VM Summary."
-        },
-        "onboot": {
-          "type": "boolean",
-          "title": "Start at Boot",
-          "default": true,
-          "description": "Automatically start the VM when the Proxmox host boots."
-        },
-        "protection": {
-          "type": "boolean",
-          "title": "Protection",
-          "default": false,
-          "description": "Prevent accidental manual VM deletion in Proxmox."
-        },
-        "min_vmid": {
-          "type": ["integer", "null"],
-          "title": "Minimum VMID",
-          "minimum": 100,
-          "maximum": 999999999,
-          "description": "Optional lower bound for Proxmox VMID allocation (e.g. 5000)."
-        },
-        "max_vmid": {
-          "type": ["integer", "null"],
-          "title": "Maximum VMID",
-          "minimum": 100,
-          "maximum": 999999999,
-          "description": "Optional upper bound for Proxmox VMID allocation (e.g. 5999)."
-        }
-      }
+    "workload_profile": {
+      "type": "string",
+      "title": "Workload Profile (defaults only)",
+      "default": "standard",
+      "description": "Profiles supply defaults only for omitted settings; explicit settings take precedence. They do not change CPU or RAM sizes.\n\nStandard — normal Talos VM: No profile-specific changes. Defaults: 2 cores, 1 socket, 4096 MiB RAM, 20 GiB boot disk, VirtIO network. qemu-guest-agent is always installed.\n\nControl plane — HA, protection and watchdog: Defaults to startup order=1,up=30; i6300esb watchdog with reset; VM deletion protection; hardware RNG; Proxmox HA started with negative resource affinity. Requires PVE 9+ affinity support. Explicit ha.state=none disables HA.\n\nStorage — SCSI, TRIM, IO threads and storage extensions: Defaults to virtio-scsi-single, cache=none, aio=io_uring, SSD emulation, discard/TRIM and IO threads. Adds siderolabs/iscsi-tools and siderolabs/util-linux-tools to Talos.\n\nGPU / AI — host CPU, UEFI, NUMA and NVIDIA extensions: Defaults to q35, host CPU, OVMF/UEFI, NUMA and ballooning disabled. Adds NVIDIA production kernel module and container-toolkit extensions. A PCI mapping must still be selected explicitly.\n\nSecure — UEFI Secure Boot, TPM and protection: Defaults to OVMF/UEFI, Secure Boot, TPM 2.0, VM deletion protection and hardware RNG. Requires compatible signed Talos installation media.\n\nThe standard profile is used when this field is blank. Help is available through this question-mark tooltip; Omni does not display a separate profile summary.",
+      "enum": [
+        "standard",
+        "control-plane",
+        "storage-node",
+        "gpu-ai-worker",
+        "hardened-secure"
+      ]
     },
-    "compute": {
-      "type": "object",
-      "title": "CPU & Memory",
-      "description": "Defaults: 2 cores, 1 socket and 4096 MB RAM when omitted.",
-      "properties": {
-        "cores": {
-          "type": "integer",
-          "title": "Cores",
-          "default": 2,
-          "minimum": 1,
-          "description": "Number of CPU cores per socket"
-        },
-        "sockets": {
-          "type": "integer",
-          "title": "Sockets",
-          "default": 1,
-          "minimum": 1,
-          "description": "Number of CPU sockets"
-        },
-        "cpu_type": {
-          "type": "string",
-          "title": "CPU Type",
-          "default": "x86-64-v2-AES",
-          "enum": [
-            "x86-64-v2-AES",
-            "x86-64-v3",
-            "x86-64-v4",
-            "host",
-            "max",
-            "kvm64",
-            "qemu64"
-          ],
-          "description": "QEMU CPU model ('host' for max performance/GPU, 'x86-64-v2-AES' for live migration)."
-        },
-        "memory": {
-          "type": "integer",
-          "title": "Memory (MB)",
-          "default": 4096,
-          "minimum": 2048,
-          "description": "RAM allocation in MiB"
-        },
-        "balloon": {
-          "type": "boolean",
-          "title": "Ballooning Device",
-          "default": true,
-          "description": "Enable memory ballooning (disable for GPU passthrough or hugepages)."
-        },
-        "numa": {
-          "type": "boolean",
-          "title": "Enable NUMA",
-          "default": false,
-          "description": "Enable NUMA topology."
-        },
-        "hugepages": {
-          "type": "string",
-          "title": "Hugepages",
-          "default": "none",
-          "enum": [
-            "none",
-            "any",
-            "2MB",
-            "1GB"
-          ],
-          "description": "Hugepages size ('none' to disable)."
-        },
-        "cpu_flags": {
-          "type": "string",
-          "title": "CPU Flags",
-          "description": "Optional semicolon-separated CPU flags (e.g. '+aes;+avx2;+pdpe1gb')."
-        },
-        "cpu_limit": {
-          "type": ["number", "null"],
-          "title": "CPU Limit",
-          "minimum": 0,
-          "description": "Optional max CPU cores limit (null or 0 for unlimited)."
-        },
-        "cpu_units": {
-          "type": ["integer", "null"],
-          "title": "CPU Units",
-          "minimum": 1,
-          "maximum": 262144,
-          "description": "Optional relative CPU scheduler weight."
+    "node_group": {
+      "type": "string",
+      "title": "Node Group (blank = auto)",
+      "default": "auto",
+      "description": "Logical node group (auto-discovered from HA Groups, HA Rules, SDN Zones, PCI Groups, or config.yaml). Use 'auto' for all cluster nodes. Leaving this field blank has the same effect as auto. Omni does not preselect JSON Schema defaults."
+    },
+    "node": {
+      "type": "string",
+      "title": "Target Node (blank = auto)",
+      "default": "auto",
+      "description": "Specific Proxmox node, or 'auto' to use the placement strategy. Leaving this field blank has the same effect as auto. Omni does not preselect JSON Schema defaults."
+    },
+    "pool": {
+      "type": "string",
+      "title": "Resource Pool (blank = auto)",
+      "default": "auto",
+      "description": "Proxmox resource pool, or 'auto' to use the Omni MachineRequestSet ID. Leaving this field blank has the same effect as auto. Omni does not preselect JSON Schema defaults."
+    },
+    "cores": {
+      "type": [
+        "integer",
+        "null"
+      ],
+      "title": "Cores (0 = default: 2)",
+      "default": 2,
+      "description": "CPU cores per socket. Omitted, blank or 0 uses 2. Existing saved values are shown directly.",
+      "allOf": [
+        {
+          "anyOf": [
+            {
+              "const": 0
+            },
+            {
+              "minimum": 1
+            }
+          ]
         }
-      }
+      ]
+    },
+    "memory": {
+      "type": [
+        "integer",
+        "null"
+      ],
+      "title": "Memory (MiB, 0 = default: 4096)",
+      "default": 4096,
+      "description": "RAM in MiB. Omitted, blank or 0 uses 4096. Existing saved values are shown directly.",
+      "allOf": [
+        {
+          "anyOf": [
+            {
+              "const": 0
+            },
+            {
+              "minimum": 2048
+            }
+          ]
+        }
+      ]
+    },
+    "disk_size": {
+      "type": [
+        "integer",
+        "null"
+      ],
+      "description": "Primary boot disk size in GiB. Omitted, blank or 0 uses 20. This boot disk remains active when the complete disk list is empty.",
+      "title": "Boot Disk Size (GiB, 0 = default: 20)",
+      "default": 20,
+      "allOf": [
+        {
+          "anyOf": [
+            {
+              "const": 0
+            },
+            {
+              "minimum": 5
+            }
+          ]
+        }
+      ]
+    },
+    "storage": {
+      "type": "string",
+      "title": "Boot Disk Storage (blank = auto)",
+      "default": "auto"
+    },
+    "storage_selector": {
+      "type": "string",
+      "description": "Optional CEL selector used when Boot Disk Storage is blank or auto. Existing selectors are preserved, for example name == \"local-zfs\". A named Boot Disk Storage takes precedence.",
+      "title": "Boot Disk Storage Selector (optional CEL override)"
+    },
+    "disk_ssd": {
+      "type": "boolean",
+      "description": "Enable SSD emulation (ssd=1) for better performance on SSD/NVMe storage",
+      "title": "Boot Disk: SSD Emulation"
+    },
+    "disk_discard": {
+      "type": "boolean",
+      "description": "Enable TRIM/discard support for thin-provisioned storage",
+      "title": "Boot Disk: Discard (TRIM)"
+    },
+    "disk_iothread": {
+      "type": "boolean",
+      "description": "Enable dedicated IO thread for better disk performance",
+      "title": "Boot Disk: IO Thread"
+    },
+    "disk_cache": {
+      "type": "string",
+      "enum": [
+        "none",
+        "writethrough",
+        "writeback",
+        "directsync",
+        "unsafe"
+      ],
+      "description": "Disk cache mode. Use 'none' for best performance with battery-backed storage",
+      "title": "Boot Disk: Cache"
+    },
+    "disk_aio": {
+      "type": "string",
+      "enum": [
+        "native",
+        "threads",
+        "io_uring"
+      ],
+      "description": "Async IO mode. Use 'io_uring' for best performance on modern kernels",
+      "title": "Boot Disk: Async IO"
+    },
+    "network_bridge": {
+      "type": "string",
+      "description": "Network bridge to attach to the VM, ex. vmbr0",
+      "title": "Primary Network Bridge (blank = vmbr0)",
+      "default": "vmbr0"
+    },
+    "vlan": {
+      "type": [
+        "integer",
+        "null"
+      ],
+      "description": "VLAN tag for primary NIC, set to 0 for none",
+      "title": "Primary NIC: VLAN Tag",
+      "allOf": [
+        {
+          "minimum": 0
+        }
+      ]
+    },
+    "network_firewall": {
+      "type": "boolean",
+      "description": "Enable per-VM firewall (fwbr) on primary NIC. Defaults to true. Set false when L2-broadcast services need traffic to bypass fwbr.",
+      "title": "Primary NIC: Firewall"
+    },
+    "additional_disks": {
+      "type": "array",
+      "description": "Additional disks to attach to the VM (scsi1, scsi2, etc.)",
+      "items": {
+        "type": "object",
+        "properties": {
+          "disk_size": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "description": "Disk size in GB",
+            "allOf": [
+              {
+                "anyOf": [
+                  {
+                    "const": 0
+                  },
+                  {
+                    "minimum": 1
+                  }
+                ]
+              }
+            ]
+          },
+          "storage_selector": {
+            "type": "string",
+            "description": "CEL expression for selecting VM disk image storage for this disk"
+          },
+          "disk_ssd": {
+            "type": "boolean",
+            "description": "Enable SSD emulation for this disk"
+          },
+          "disk_discard": {
+            "type": "boolean",
+            "description": "Enable TRIM/discard support for this disk"
+          },
+          "disk_iothread": {
+            "type": "boolean",
+            "description": "Enable dedicated IO thread for this disk"
+          },
+          "disk_cache": {
+            "type": "string",
+            "enum": [
+              "none",
+              "writethrough",
+              "writeback",
+              "directsync",
+              "unsafe"
+            ],
+            "description": "Disk cache mode for this disk"
+          },
+          "disk_aio": {
+            "type": "string",
+            "enum": [
+              "native",
+              "threads",
+              "io_uring"
+            ],
+            "description": "Async IO mode for this disk"
+          },
+          "storage": {
+            "type": "string",
+            "title": "Storage",
+            "default": "auto",
+            "description": "VM-disk-capable Proxmox storage pool ('auto' picks the first available)."
+          }
+        },
+        "required": [
+          "disk_size",
+          "storage_selector"
+        ]
+      },
+      "title": "Additional Data Disks (legacy format)"
+    },
+    "additional_nics": {
+      "type": "array",
+      "description": "Additional network interfaces (e.g., for storage networks)",
+      "items": {
+        "type": "object",
+        "properties": {
+          "bridge": {
+            "type": "string",
+            "description": "Network bridge (e.g., vmbr1)"
+          },
+          "vlan": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "description": "Optional VLAN tag",
+            "allOf": [
+              {
+                "minimum": 0
+              }
+            ]
+          },
+          "firewall": {
+            "type": "boolean",
+            "description": "Enable Proxmox firewall for this NIC"
+          },
+          "addresses": {
+            "type": "array",
+            "title": "Static IP Addresses (CIDR)",
+            "items": {
+              "type": "string",
+              "minLength": 3
+            }
+          },
+          "gateway4": {
+            "type": "string",
+            "title": "IPv4 Gateway"
+          },
+          "ip_pool": {
+            "type": "string",
+            "title": "Static IP Pool (Auto-Assign)",
+            "description": "CIDR range (e.g. '192.168.1.100-192.168.1.150/24') to auto-assign unique IPs per VM."
+          },
+          "model": {
+            "type": "string",
+            "title": "Model",
+            "default": "virtio",
+            "enum": [
+              "virtio",
+              "e1000",
+              "e1000e",
+              "vmxnet3",
+              "rtl8139"
+            ]
+          },
+          "mtu": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "title": "MTU",
+            "allOf": [
+              {
+                "anyOf": [
+                  {
+                    "const": 0
+                  },
+                  {
+                    "minimum": 1,
+                    "maximum": 65520
+                  }
+                ]
+              }
+            ]
+          },
+          "queues": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "title": "Multiqueue",
+            "allOf": [
+              {
+                "anyOf": [
+                  {
+                    "const": 0
+                  },
+                  {
+                    "minimum": 1,
+                    "maximum": 64
+                  }
+                ]
+              }
+            ]
+          },
+          "rate_limit": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "title": "Rate Limit (MB/s)",
+            "allOf": [
+              {
+                "minimum": 0
+              }
+            ]
+          }
+        },
+        "required": [
+          "bridge"
+        ]
+      },
+      "title": "Additional Network Interfaces (legacy format)"
     },
     "disks": {
       "type": "array",
-      "title": "Disks",
-      "description": "First entry is the boot disk; later entries are data disks. An empty list uses a 20 GB boot disk on automatic storage. Changing an existing boot bus is unsupported.",
+      "title": "Advanced: Complete Disk List (optional boot + data override)",
+      "description": "Optional replacement for the boot disk fields above. Leave empty to keep the boot disk (default 20 GiB). If you add entries, the FIRST entry replaces the boot disk, then the rest are data disks. Legacy additional_disks are still appended.",
       "items": {
         "type": "object",
         "title": "Hard Disk",
@@ -198,11 +371,25 @@
             "description": "VM-disk-capable Proxmox storage pool ('auto' picks the first available)."
           },
           "size": {
-            "type": "integer",
+            "type": [
+              "integer",
+              "null"
+            ],
             "title": "Disk Size (GB)",
             "default": 20,
-            "minimum": 1,
-            "description": "Disk size in GB"
+            "description": "Disk size in GB",
+            "allOf": [
+              {
+                "anyOf": [
+                  {
+                    "const": 0
+                  },
+                  {
+                    "minimum": 1
+                  }
+                ]
+              }
+            ]
           },
           "bus": {
             "type": "string",
@@ -275,24 +462,57 @@
             "description": "Optional name for data disks: auto-generates a Talos UserVolumeConfig mounted at /var/mnt/<volume_name>."
           },
           "iops_read": {
-            "type": ["integer", "null"],
+            "type": [
+              "integer",
+              "null"
+            ],
             "title": "Read Limit (IOPS)",
-            "minimum": 0
+            "allOf": [
+              {
+                "minimum": 0
+              }
+            ]
           },
           "iops_write": {
-            "type": ["integer", "null"],
+            "type": [
+              "integer",
+              "null"
+            ],
             "title": "Write Limit (IOPS)",
-            "minimum": 0
+            "allOf": [
+              {
+                "minimum": 0
+              }
+            ]
           },
           "mbps_read": {
-            "type": ["number", "null"],
+            "type": [
+              "number",
+              "null"
+            ],
             "title": "Read Limit (MB/s)",
-            "minimum": 0
+            "allOf": [
+              {
+                "minimum": 0
+              }
+            ]
           },
           "mbps_write": {
-            "type": ["number", "null"],
+            "type": [
+              "number",
+              "null"
+            ],
             "title": "Write Limit (MB/s)",
-            "minimum": 0
+            "allOf": [
+              {
+                "minimum": 0
+              }
+            ]
+          },
+          "storage_selector": {
+            "type": "string",
+            "title": "Storage Selector (CEL)",
+            "description": "Preserves an existing CEL storage selection. Used only when Storage is auto."
           }
         },
         "required": [
@@ -300,433 +520,729 @@
         ]
       }
     },
-    "network": {
-      "type": "object",
-      "title": "Network",
-      "description": "VM network interfaces (net0, net1, ...), LACP bonds, static IPs / IP pools, and global DNS.",
-      "properties": {
-        "nics": {
-          "type": "array",
-          "title": "Network Devices (NICs)",
-          "description": "List of VM network cards (net0, net1, ...).",
-          "items": {
-            "type": "object",
-            "title": "Network Device",
-            "properties": {
-              "bridge": {
-                "type": "string",
-                "title": "Bridge / SDN VNet",
-                "default": "vmbr0",
-                "description": "Proxmox bridge or SDN VNet"
-              },
-              "model": {
-                "type": "string",
-                "title": "Model",
-                "default": "virtio",
-                "enum": [
-                  "virtio",
-                  "e1000",
-                  "e1000e",
-                  "vmxnet3",
-                  "rtl8139"
-                ]
-              },
-              "vlan": {
-                "type": ["integer", "null"],
-                "title": "VLAN Tag",
-                "default": 0,
+    "nics": {
+      "type": "array",
+      "title": "Advanced: Complete NIC List (optional primary + secondary override)",
+      "description": "Optional replacement for the primary network fields above. Leave empty to keep one VirtIO NIC on the primary bridge (default vmbr0). If you add entries, the FIRST entry replaces the primary NIC. Legacy additional_nics are still appended.",
+      "items": {
+        "type": "object",
+        "title": "Network Device",
+        "properties": {
+          "bridge": {
+            "type": "string",
+            "title": "Bridge / SDN VNet",
+            "default": "vmbr0",
+            "description": "Proxmox bridge or SDN VNet"
+          },
+          "model": {
+            "type": "string",
+            "title": "Model",
+            "default": "virtio",
+            "enum": [
+              "virtio",
+              "e1000",
+              "e1000e",
+              "vmxnet3",
+              "rtl8139"
+            ]
+          },
+          "vlan": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "title": "VLAN Tag",
+            "default": 0,
+            "allOf": [
+              {
                 "minimum": 0,
                 "maximum": 4094
-              },
-              "firewall": {
-                "type": "boolean",
-                "title": "Firewall",
-                "default": true
-              },
-              "mtu": {
-                "type": ["integer", "null"],
-                "title": "MTU",
-                "minimum": 1,
-                "maximum": 65520
-              },
-              "queues": {
-                "type": ["integer", "null"],
-                "title": "Multiqueue",
-                "minimum": 1,
-                "maximum": 64
-              },
-              "rate_limit": {
-                "type": ["number", "null"],
-                "title": "Rate Limit (MB/s)",
-                "minimum": 0
-              },
-              "mac_address": {
-                "type": "string",
-                "title": "MAC Address"
-              },
-              "trunks": {
-                "type": "string",
-                "title": "VLAN Trunks"
-              },
-              "dhcp4": {
-                "type": "boolean",
-                "title": "DHCPv4"
-              },
-              "dhcp6": {
-                "type": "boolean",
-                "title": "DHCPv6",
-                "default": false
-              },
-              "ip_pool": {
-                "type": "string",
-                "title": "Static IP Pool (Auto-Assign)",
-                "description": "CIDR range (e.g. '192.168.1.100-192.168.1.150/24') to auto-assign unique IPs per VM."
-              },
-              "addresses": {
-                "type": "array",
-                "title": "Static IP Addresses (CIDR)",
-                "items": {
-                  "type": "string",
-                  "minLength": 3
-                }
-              },
-              "gateway4": {
-                "type": "string",
-                "title": "IPv4 Gateway"
-              },
-              "gateway6": {
-                "type": "string",
-                "title": "IPv6 Gateway"
-              },
-              "nameservers": {
-                "type": "array",
-                "title": "DNS Servers",
-                "items": {
-                  "type": "string"
-                }
-              },
-              "search_domains": {
-                "type": "array",
-                "title": "DNS Search Domains",
-                "items": {
-                  "type": "string"
-                }
-              },
-              "routes": {
-                "type": "array",
-                "title": "Static Routes",
-                "items": {
-                  "type": "object",
-                  "title": "Route",
-                  "properties": {
-                    "to": {
-                      "type": "string",
-                      "title": "Destination (CIDR)"
-                    },
-                    "via": {
-                      "type": "string",
-                      "title": "Gateway (Via)"
-                    },
-                    "metric": {
-                      "type": ["integer", "null"],
-                      "title": "Metric",
-                      "minimum": 0
-                    },
-                    "on_link": {
-                      "type": "boolean",
-                      "title": "On-Link",
-                      "default": false
-                    }
+              }
+            ]
+          },
+          "firewall": {
+            "type": "boolean",
+            "title": "Firewall",
+            "default": true
+          },
+          "mtu": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "title": "MTU",
+            "allOf": [
+              {
+                "anyOf": [
+                  {
+                    "const": 0
                   },
-                  "required": [
-                    "to",
-                    "via"
-                  ]
-                }
+                  {
+                    "minimum": 1,
+                    "maximum": 65520
+                  }
+                ]
               }
-            },
-            "required": [
-              "bridge"
             ]
-          }
-        },
-        "bonds": {
-          "type": "array",
-          "title": "Network Bonds (LACP / Active-Backup)",
-          "items": {
-            "type": "object",
-            "title": "Bond",
-            "properties": {
-              "name": {
-                "type": "string",
-                "title": "Bond Name",
-                "default": "bond0"
-              },
-              "interfaces": {
-                "type": "array",
-                "title": "Member Interfaces",
-                "items": {
-                  "type": "string"
-                }
-              },
-              "mode": {
-                "type": "string",
-                "title": "Mode",
-                "default": "802.3ad",
-                "enum": [
-                  "802.3ad",
-                  "active-backup",
-                  "balance-xor",
-                  "broadcast",
-                  "balance-tlb",
-                  "balance-alb"
+          },
+          "queues": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "title": "Multiqueue",
+            "allOf": [
+              {
+                "anyOf": [
+                  {
+                    "const": 0
+                  },
+                  {
+                    "minimum": 1,
+                    "maximum": 64
+                  }
                 ]
-              },
-              "lacp_rate": {
-                "type": "string",
-                "title": "LACP Rate",
-                "default": "fast",
-                "enum": [
-                  "fast",
-                  "slow"
-                ]
-              },
-              "transmit_hash_policy": {
-                "type": "string",
-                "title": "Hash Policy",
-                "default": "layer2+3",
-                "enum": [
-                  "layer2",
-                  "layer2+3",
-                  "layer3+4"
-                ]
-              },
-              "mii_monitor_interval": {
-                "type": ["integer", "null"],
-                "title": "MII Monitor (ms)",
-                "default": 100,
+              }
+            ]
+          },
+          "rate_limit": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "title": "Rate Limit (MB/s)",
+            "allOf": [
+              {
                 "minimum": 0
-              },
-              "mtu": {
-                "type": ["integer", "null"],
-                "title": "MTU",
-                "minimum": 576,
-                "maximum": 65520
-              },
-              "dhcp4": {
-                "type": "boolean",
-                "title": "DHCPv4"
-              },
-              "ip_pool": {
-                "type": "string",
-                "title": "Static IP Pool"
-              },
-              "addresses": {
-                "type": "array",
-                "title": "Static IP Addresses (CIDR)",
-                "items": {
-                  "type": "string"
+              }
+            ]
+          },
+          "mac_address": {
+            "type": "string",
+            "title": "MAC Address"
+          },
+          "trunks": {
+            "type": "string",
+            "title": "VLAN Trunks"
+          },
+          "dhcp4": {
+            "type": "boolean",
+            "title": "DHCPv4"
+          },
+          "dhcp6": {
+            "type": "boolean",
+            "title": "DHCPv6",
+            "default": false
+          },
+          "ip_pool": {
+            "type": "string",
+            "title": "Static IP Pool (Auto-Assign)",
+            "description": "CIDR range (e.g. '192.168.1.100-192.168.1.150/24') to auto-assign unique IPs per VM."
+          },
+          "addresses": {
+            "type": "array",
+            "title": "Static IP Addresses (CIDR)",
+            "items": {
+              "type": "string",
+              "minLength": 3
+            }
+          },
+          "gateway4": {
+            "type": "string",
+            "title": "IPv4 Gateway"
+          },
+          "gateway6": {
+            "type": "string",
+            "title": "IPv6 Gateway"
+          },
+          "nameservers": {
+            "type": "array",
+            "title": "DNS Servers",
+            "items": {
+              "type": "string"
+            }
+          },
+          "search_domains": {
+            "type": "array",
+            "title": "DNS Search Domains",
+            "items": {
+              "type": "string"
+            }
+          },
+          "routes": {
+            "type": "array",
+            "title": "Static Routes",
+            "items": {
+              "type": "object",
+              "title": "Route",
+              "properties": {
+                "to": {
+                  "type": "string",
+                  "title": "Destination (CIDR)"
+                },
+                "via": {
+                  "type": "string",
+                  "title": "Gateway (Via)"
+                },
+                "metric": {
+                  "type": [
+                    "integer",
+                    "null"
+                  ],
+                  "title": "Metric",
+                  "allOf": [
+                    {
+                      "minimum": 0
+                    }
+                  ]
+                },
+                "on_link": {
+                  "type": "boolean",
+                  "title": "On-Link",
+                  "default": false
                 }
               },
-              "gateway4": {
-                "type": "string",
-                "title": "IPv4 Gateway"
-              }
+              "required": [
+                "to",
+                "via"
+              ]
+            }
+          }
+        },
+        "required": [
+          "bridge"
+        ]
+      }
+    },
+    "placement_strategy": {
+      "type": "string",
+      "title": "Placement Strategy",
+      "default": "spread",
+      "enum": [
+        "spread",
+        "fewer-vms",
+        "round-robin",
+        "binpack"
+      ],
+      "description": "Auto-placement strategy when Target Node is 'auto'."
+    },
+    "auto_create_pool": {
+      "type": "boolean",
+      "title": "Auto-Create Resource Pool",
+      "default": true,
+      "description": "Automatically create the specified Proxmox resource pool if it does not exist."
+    },
+    "tags": {
+      "type": "array",
+      "title": "VM Tags",
+      "items": {
+        "type": "string",
+        "minLength": 1
+      },
+      "description": "Proxmox VM tags"
+    },
+    "description": {
+      "type": "string",
+      "title": "Notes / Description",
+      "description": "Optional notes shown in the Proxmox VM Summary."
+    },
+    "onboot": {
+      "type": "boolean",
+      "title": "Start at Boot",
+      "default": true,
+      "description": "Automatically start the VM when the Proxmox host boots."
+    },
+    "protection": {
+      "type": "boolean",
+      "title": "Protection",
+      "default": false,
+      "description": "Prevent accidental manual VM deletion in Proxmox."
+    },
+    "min_vmid": {
+      "type": [
+        "integer",
+        "null"
+      ],
+      "title": "Minimum VMID",
+      "description": "Optional lower bound for Proxmox VMID allocation (e.g. 5000).",
+      "allOf": [
+        {
+          "anyOf": [
+            {
+              "const": 0
             },
-            "required": [
-              "name",
-              "interfaces"
+            {
+              "minimum": 100,
+              "maximum": 999999999
+            }
+          ]
+        }
+      ]
+    },
+    "max_vmid": {
+      "type": [
+        "integer",
+        "null"
+      ],
+      "title": "Maximum VMID",
+      "description": "Optional upper bound for Proxmox VMID allocation (e.g. 5999).",
+      "allOf": [
+        {
+          "anyOf": [
+            {
+              "const": 0
+            },
+            {
+              "minimum": 100,
+              "maximum": 999999999
+            }
+          ]
+        }
+      ]
+    },
+    "sockets": {
+      "type": [
+        "integer",
+        "null"
+      ],
+      "title": "Sockets",
+      "default": 1,
+      "description": "Number of CPU sockets",
+      "allOf": [
+        {
+          "anyOf": [
+            {
+              "const": 0
+            },
+            {
+              "minimum": 1
+            }
+          ]
+        }
+      ]
+    },
+    "cpu_type": {
+      "type": "string",
+      "title": "CPU Type",
+      "default": "x86-64-v2-AES",
+      "enum": [
+        "x86-64-v2-AES",
+        "x86-64-v3",
+        "x86-64-v4",
+        "host",
+        "max",
+        "kvm64",
+        "qemu64"
+      ],
+      "description": "QEMU CPU model ('host' for max performance/GPU, 'x86-64-v2-AES' for live migration)."
+    },
+    "balloon": {
+      "type": "boolean",
+      "title": "Ballooning Device",
+      "default": true,
+      "description": "Enable memory ballooning (disable for GPU passthrough or hugepages)."
+    },
+    "numa": {
+      "type": "boolean",
+      "title": "Enable NUMA",
+      "default": false,
+      "description": "Enable NUMA topology."
+    },
+    "hugepages": {
+      "type": "string",
+      "title": "Hugepages",
+      "default": "none",
+      "enum": [
+        "none",
+        "any",
+        "2MB",
+        "1GB"
+      ],
+      "description": "Hugepages size ('none' to disable)."
+    },
+    "cpu_flags": {
+      "type": "string",
+      "title": "CPU Flags",
+      "description": "Optional semicolon-separated CPU flags (e.g. '+aes;+avx2;+pdpe1gb')."
+    },
+    "cpu_limit": {
+      "type": [
+        "number",
+        "null"
+      ],
+      "title": "CPU Limit",
+      "description": "Optional max CPU cores limit (null or 0 for unlimited).",
+      "allOf": [
+        {
+          "minimum": 0
+        }
+      ]
+    },
+    "cpu_units": {
+      "type": [
+        "integer",
+        "null"
+      ],
+      "title": "CPU Units",
+      "description": "Optional relative CPU scheduler weight.",
+      "allOf": [
+        {
+          "anyOf": [
+            {
+              "const": 0
+            },
+            {
+              "minimum": 1,
+              "maximum": 262144
+            }
+          ]
+        }
+      ]
+    },
+    "bonds": {
+      "type": "array",
+      "title": "Network Bonds (LACP / Active-Backup)",
+      "items": {
+        "type": "object",
+        "title": "Bond",
+        "properties": {
+          "name": {
+            "type": "string",
+            "title": "Bond Name",
+            "default": "bond0"
+          },
+          "interfaces": {
+            "type": "array",
+            "title": "Member Interfaces",
+            "items": {
+              "type": "string"
+            }
+          },
+          "mode": {
+            "type": "string",
+            "title": "Mode",
+            "default": "802.3ad",
+            "enum": [
+              "802.3ad",
+              "active-backup",
+              "balance-xor",
+              "broadcast",
+              "balance-tlb",
+              "balance-alb"
             ]
+          },
+          "lacp_rate": {
+            "type": "string",
+            "title": "LACP Rate",
+            "default": "fast",
+            "enum": [
+              "fast",
+              "slow"
+            ]
+          },
+          "transmit_hash_policy": {
+            "type": "string",
+            "title": "Hash Policy",
+            "default": "layer2+3",
+            "enum": [
+              "layer2",
+              "layer2+3",
+              "layer3+4"
+            ]
+          },
+          "mii_monitor_interval": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "title": "MII Monitor (ms)",
+            "default": 100,
+            "allOf": [
+              {
+                "minimum": 0
+              }
+            ]
+          },
+          "mtu": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "title": "MTU",
+            "allOf": [
+              {
+                "anyOf": [
+                  {
+                    "const": 0
+                  },
+                  {
+                    "minimum": 576,
+                    "maximum": 65520
+                  }
+                ]
+              }
+            ]
+          },
+          "dhcp4": {
+            "type": "boolean",
+            "title": "DHCPv4"
+          },
+          "ip_pool": {
+            "type": "string",
+            "title": "Static IP Pool"
+          },
+          "addresses": {
+            "type": "array",
+            "title": "Static IP Addresses (CIDR)",
+            "items": {
+              "type": "string"
+            }
+          },
+          "gateway4": {
+            "type": "string",
+            "title": "IPv4 Gateway"
+          },
+          "dhcp6": {
+            "type": "boolean",
+            "title": "DHCPv6",
+            "default": false
+          },
+          "gateway6": {
+            "type": "string",
+            "title": "IPv6 Gateway"
+          },
+          "nameservers": {
+            "type": "array",
+            "title": "DNS Servers",
+            "items": {
+              "type": "string"
+            }
+          },
+          "search_domains": {
+            "type": "array",
+            "title": "DNS Search Domains",
+            "items": {
+              "type": "string"
+            }
+          },
+          "routes": {
+            "type": "array",
+            "title": "Static Routes",
+            "items": {
+              "type": "object",
+              "title": "Route",
+              "properties": {
+                "to": {
+                  "type": "string",
+                  "title": "Destination (CIDR)"
+                },
+                "via": {
+                  "type": "string",
+                  "title": "Gateway (Via)"
+                },
+                "metric": {
+                  "type": [
+                    "integer",
+                    "null"
+                  ],
+                  "title": "Metric",
+                  "allOf": [
+                    {
+                      "minimum": 0
+                    }
+                  ]
+                },
+                "on_link": {
+                  "type": "boolean",
+                  "title": "On-Link",
+                  "default": false
+                }
+              },
+              "required": [
+                "to",
+                "via"
+              ]
+            }
           }
         },
-        "dns_servers": {
-          "type": "array",
-          "title": "Global DNS Servers",
-          "items": {
-            "type": "string"
-          }
-        },
-        "dns_search_domains": {
-          "type": "array",
-          "title": "Global DNS Search Domains",
-          "items": {
-            "type": "string"
-          }
-        }
+        "required": [
+          "name",
+          "interfaces"
+        ]
       }
     },
-    "os": {
-      "type": "object",
-      "title": "OS & Provisioning",
-      "description": "Talos ISO / VM Template source, CPU architecture, system extensions, and kernel arguments.",
-      "properties": {
-        "provisioning_mode": {
-          "type": "string",
-          "title": "Provisioning Mode",
-          "default": "iso",
-          "enum": [
-            "iso",
-            "clone"
-          ],
-          "description": "'iso' boots from a Talos Image Factory ISO; 'clone' clones an existing Proxmox VM Template."
-        },
-        "iso_storage": {
-          "type": "string",
-          "title": "ISO Storage",
-          "default": "auto",
-          "description": "ISO-capable storage for Talos ISO and Cloud-Init images ('auto' picks the first available ISO storage)."
-        },
-        "template_vmid": {
-          "type": "string",
-          "title": "VM Template (Clone Mode)",
-          "default": "none",
-          "description": "Proxmox VM Template to clone when Provisioning Mode is 'clone' ('none' if using ISO mode)."
-        },
-        "full_clone": {
-          "type": "boolean",
-          "title": "Full Clone",
-          "default": true,
-          "description": "Perform a full disk clone (true) or linked clone (false) in clone mode."
-        },
-        "architecture": {
-          "type": "string",
-          "title": "Architecture",
-          "default": "amd64",
-          "enum": [
-            "amd64",
-            "arm64"
-          ],
-          "description": "Target CPU architecture for the Talos installation media."
-        },
-        "talos_extensions": {
-          "type": "array",
-          "title": "Talos System Extensions",
-          "description": "Additional official Talos extensions embedded in the installation ISO (qemu-guest-agent is always included).",
-          "items": {
-            "type": "string",
-            "minLength": 1
-          }
-        },
-        "extra_kernel_args": {
-          "type": "array",
-          "title": "Extra Kernel Arguments",
-          "description": "Additional Linux kernel parameters (e.g. 'intel_iommu=on', 'iommu=pt').",
-          "items": {
-            "type": "string",
-            "minLength": 1
-          }
-        }
+    "dns_servers": {
+      "type": "array",
+      "title": "Global DNS Servers",
+      "items": {
+        "type": "string"
       }
     },
-    "system": {
-      "type": "object",
-      "title": "System & Hardware",
-      "description": "Proxmox VM machine type, UEFI/BIOS firmware, TPM, SCSI controller, display, and watchdog.",
-      "properties": {
-        "machine_type": {
-          "type": "string",
-          "title": "Machine",
-          "default": "q35",
-          "enum": [
-            "q35",
-            "i440fx"
-          ],
-          "description": "QEMU machine type ('q35' recommended for PCIe/GPU passthrough)."
-        },
-        "bios": {
-          "type": "string",
-          "title": "BIOS / Firmware",
-          "default": "seabios",
-          "enum": [
-            "seabios",
-            "ovmf"
-          ],
-          "description": "VM firmware ('ovmf' enables UEFI, EFI disk, and Secure Boot)."
-        },
-        "secure_boot": {
-          "type": "boolean",
-          "title": "UEFI Secure Boot",
-          "default": false,
-          "description": "Enable UEFI Secure Boot (requires BIOS='ovmf')."
-        },
-        "tpm": {
-          "type": "boolean",
-          "title": "TPM 2.0",
-          "default": false,
-          "description": "Attach a virtual TPM 2.0 state device."
-        },
-        "scsihw": {
-          "type": "string",
-          "title": "SCSI Controller",
-          "default": "virtio-scsi-single",
-          "enum": [
-            "virtio-scsi-single",
-            "virtio-scsi-pci",
-            "lsi",
-            "lsi53c810",
-            "megasas",
-            "pvscsi"
-          ],
-          "description": "SCSI controller model ('virtio-scsi-single' recommended for IOThread)."
-        },
-        "vga": {
-          "type": "string",
-          "title": "Display (VGA)",
-          "default": "std",
-          "enum": [
-            "std",
-            "virtio",
-            "virtio-gl",
-            "qxl",
-            "serial0",
-            "none",
-            "cirrus",
-            "vmware"
-          ],
-          "description": "Proxmox display adapter."
-        },
-        "serial_console": {
-          "type": "boolean",
-          "title": "Serial Console (serial0)",
-          "default": false,
-          "description": "Attach a virtual serial socket for Proxmox xterm.js console."
-        },
-        "rng": {
-          "type": "boolean",
-          "title": "VirtIO RNG (/dev/urandom)",
-          "default": true,
-          "description": "Attach VirtIO hardware RNG for fast cryptographic entropy."
-        },
-        "watchdog_model": {
-          "type": "string",
-          "title": "Watchdog Model",
-          "default": "none",
-          "enum": [
-            "none",
-            "i6300esb",
-            "ib700"
-          ],
-          "description": "Optional virtual hardware watchdog device."
-        },
-        "watchdog_action": {
-          "type": "string",
-          "title": "Watchdog Action",
-          "default": "reset",
-          "enum": [
-            "reset",
-            "poweroff",
-            "pause",
-            "debug",
-            "none"
-          ],
-          "description": "Action when the watchdog timer expires."
-        },
-        "startup_order": {
-          "type": "string",
-          "title": "Start/Shutdown Order",
-          "description": "Proxmox startup order (e.g. 'order=1,up=30,down=60')."
-        }
+    "dns_search_domains": {
+      "type": "array",
+      "title": "Global DNS Search Domains",
+      "items": {
+        "type": "string"
       }
+    },
+    "provisioning_mode": {
+      "type": "string",
+      "title": "Provisioning Mode",
+      "default": "iso",
+      "enum": [
+        "iso",
+        "clone"
+      ],
+      "description": "'iso' boots from a Talos Image Factory ISO; 'clone' clones an existing Proxmox VM Template."
+    },
+    "iso_storage": {
+      "type": "string",
+      "title": "ISO Storage",
+      "default": "auto",
+      "description": "ISO-capable storage for Talos ISO and Cloud-Init images ('auto' picks the first available ISO storage)."
+    },
+    "template_vmid": {
+      "type": "string",
+      "title": "VM Template (Clone Mode)",
+      "default": "none",
+      "description": "Proxmox VM Template to clone when Provisioning Mode is 'clone' ('none' if using ISO mode)."
+    },
+    "full_clone": {
+      "type": "boolean",
+      "title": "Full Clone",
+      "default": true,
+      "description": "Perform a full disk clone (true) or linked clone (false) in clone mode."
+    },
+    "architecture": {
+      "type": "string",
+      "title": "Architecture",
+      "default": "amd64",
+      "enum": [
+        "amd64",
+        "arm64"
+      ],
+      "description": "Target CPU architecture for the Talos installation media."
+    },
+    "talos_extensions": {
+      "type": "array",
+      "title": "Talos System Extensions",
+      "description": "Additional official Talos extensions embedded in the installation ISO (qemu-guest-agent is always included).",
+      "items": {
+        "type": "string",
+        "minLength": 1
+      }
+    },
+    "extra_kernel_args": {
+      "type": "array",
+      "title": "Extra Kernel Arguments",
+      "description": "Additional Linux kernel parameters (e.g. 'intel_iommu=on', 'iommu=pt').",
+      "items": {
+        "type": "string",
+        "minLength": 1
+      }
+    },
+    "machine_type": {
+      "type": "string",
+      "title": "Machine",
+      "default": "q35",
+      "enum": [
+        "q35",
+        "i440fx"
+      ],
+      "description": "QEMU machine type ('q35' recommended for PCIe/GPU passthrough)."
+    },
+    "bios": {
+      "type": "string",
+      "title": "BIOS / Firmware",
+      "default": "seabios",
+      "enum": [
+        "seabios",
+        "ovmf"
+      ],
+      "description": "VM firmware ('ovmf' enables UEFI, EFI disk, and Secure Boot)."
+    },
+    "secure_boot": {
+      "type": "boolean",
+      "title": "UEFI Secure Boot",
+      "default": false,
+      "description": "Enable UEFI Secure Boot (requires BIOS='ovmf')."
+    },
+    "tpm": {
+      "type": "boolean",
+      "title": "TPM 2.0",
+      "default": false,
+      "description": "Attach a virtual TPM 2.0 state device."
+    },
+    "scsihw": {
+      "type": "string",
+      "title": "SCSI Controller",
+      "default": "virtio-scsi-single",
+      "enum": [
+        "virtio-scsi-single",
+        "virtio-scsi-pci",
+        "lsi",
+        "lsi53c810",
+        "megasas",
+        "pvscsi"
+      ],
+      "description": "SCSI controller model ('virtio-scsi-single' recommended for IOThread)."
+    },
+    "vga": {
+      "type": "string",
+      "title": "Display (VGA)",
+      "default": "std",
+      "enum": [
+        "std",
+        "virtio",
+        "virtio-gl",
+        "qxl",
+        "serial0",
+        "none",
+        "cirrus",
+        "vmware"
+      ],
+      "description": "Proxmox display adapter."
+    },
+    "serial_console": {
+      "type": "boolean",
+      "title": "Serial Console (serial0)",
+      "default": false,
+      "description": "Attach a virtual serial socket for Proxmox xterm.js console."
+    },
+    "rng": {
+      "type": "boolean",
+      "title": "VirtIO RNG (/dev/urandom)",
+      "default": true,
+      "description": "Attach VirtIO hardware RNG for fast cryptographic entropy."
+    },
+    "watchdog_model": {
+      "type": "string",
+      "title": "Watchdog Model",
+      "default": "none",
+      "enum": [
+        "none",
+        "i6300esb",
+        "ib700"
+      ],
+      "description": "Optional virtual hardware watchdog device."
+    },
+    "watchdog_action": {
+      "type": "string",
+      "title": "Watchdog Action",
+      "default": "reset",
+      "enum": [
+        "reset",
+        "poweroff",
+        "pause",
+        "debug",
+        "none"
+      ],
+      "description": "Action when the watchdog timer expires."
+    },
+    "startup_order": {
+      "type": "string",
+      "title": "Start/Shutdown Order",
+      "description": "Proxmox startup order (e.g. 'order=1,up=30,down=60')."
     },
     "ha": {
       "type": "object",
@@ -751,16 +1267,30 @@
           "default": "none"
         },
         "max_restart": {
-          "type": ["integer", "null"],
+          "type": [
+            "integer",
+            "null"
+          ],
           "title": "Max Restarts",
           "default": 1,
-          "minimum": 0
+          "allOf": [
+            {
+              "minimum": 0
+            }
+          ]
         },
         "max_relocate": {
-          "type": ["integer", "null"],
+          "type": [
+            "integer",
+            "null"
+          ],
           "title": "Max Relocates",
           "default": 1,
-          "minimum": 0
+          "allOf": [
+            {
+              "minimum": 0
+            }
+          ]
         },
         "failback": {
           "type": "boolean",
@@ -823,148 +1353,157 @@
           "default": "auto"
         },
         "rate_limit": {
-          "type": ["number", "null"],
+          "type": [
+            "number",
+            "null"
+          ],
           "title": "Rate Limit (MB/s)",
-          "minimum": 0
-        }
-      }
-    },
-    "firewall": {
-      "type": "object",
-      "title": "Firewall & Security",
-      "description": "Proxmox cluster security groups and VM-level firewall policy.",
-      "properties": {
-        "security_groups": {
-          "type": "array",
-          "title": "Security Groups",
-          "items": {
-            "type": "string",
-            "minLength": 1
-          }
-        },
-        "options": {
-          "type": "object",
-          "title": "VM Firewall Options",
-          "properties": {
-            "enable": {
-              "type": "boolean",
-              "title": "Enable Firewall",
-              "default": false
-            },
-            "policy_in": {
-              "type": "string",
-              "title": "Inbound Policy",
-              "default": "ACCEPT",
-              "enum": [
-                "ACCEPT",
-                "DROP",
-                "REJECT"
-              ]
-            },
-            "policy_out": {
-              "type": "string",
-              "title": "Outbound Policy",
-              "default": "ACCEPT",
-              "enum": [
-                "ACCEPT",
-                "DROP",
-                "REJECT"
-              ]
-            },
-            "dhcp": {
-              "type": "boolean",
-              "title": "Allow DHCP",
-              "default": true
-            },
-            "macfilter": {
-              "type": "boolean",
-              "title": "MAC Filter",
-              "default": true
-            },
-            "ipfilter": {
-              "type": "boolean",
-              "title": "IP Filter",
-              "default": false
-            },
-            "ndp": {
-              "type": "boolean",
-              "title": "Allow IPv6 NDP",
-              "default": true
-            },
-            "radv": {
-              "type": "boolean",
-              "title": "Allow Router Advertisements",
-              "default": false
+          "allOf": [
+            {
+              "minimum": 0
             }
-          }
+          ]
         }
       }
     },
-    "passthrough": {
+    "security_groups": {
+      "type": "array",
+      "title": "Security Groups",
+      "items": {
+        "type": "string",
+        "minLength": 1
+      }
+    },
+    "firewall_options": {
       "type": "object",
-      "title": "Hardware Passthrough",
-      "description": "PCI/GPU and USB device passthrough via Proxmox Resource Mappings.",
+      "title": "VM Firewall Options",
       "properties": {
-        "pci_devices": {
-          "type": "array",
-          "title": "PCI / GPU Devices",
-          "items": {
-            "type": "object",
-            "title": "PCI Device",
-            "properties": {
-              "mapping": {
-                "type": "string",
-                "title": "PCI Mapping"
-              },
-              "mdev": {
-                "type": "string",
-                "title": "Mediated Device (MDev)"
-              },
-              "pcie": {
-                "type": "boolean",
-                "title": "PCI Express (PCIe)",
-                "default": true
-              },
-              "primary_gpu": {
-                "type": "boolean",
-                "title": "Primary GPU (x-vga)",
-                "default": false
-              },
-              "rombar": {
-                "type": "boolean",
-                "title": "ROM BAR",
-                "default": true
-              }
-            },
-            "required": [
-              "mapping"
-            ]
+        "enable": {
+          "type": "boolean",
+          "title": "Enable Firewall",
+          "default": false
+        },
+        "policy_in": {
+          "type": "string",
+          "title": "Inbound Policy",
+          "default": "ACCEPT",
+          "enum": [
+            "ACCEPT",
+            "DROP",
+            "REJECT"
+          ]
+        },
+        "policy_out": {
+          "type": "string",
+          "title": "Outbound Policy",
+          "default": "ACCEPT",
+          "enum": [
+            "ACCEPT",
+            "DROP",
+            "REJECT"
+          ]
+        },
+        "dhcp": {
+          "type": "boolean",
+          "title": "Allow DHCP",
+          "default": true
+        },
+        "macfilter": {
+          "type": "boolean",
+          "title": "MAC Filter",
+          "default": true
+        },
+        "ipfilter": {
+          "type": "boolean",
+          "title": "IP Filter",
+          "default": false
+        },
+        "ndp": {
+          "type": "boolean",
+          "title": "Allow IPv6 NDP",
+          "default": true
+        },
+        "radv": {
+          "type": "boolean",
+          "title": "Allow Router Advertisements",
+          "default": false
+        },
+        "log_level_in": {
+          "type": "string",
+          "title": "Inbound Log Level",
+          "enum": [
+            "nolog",
+            "emerg",
+            "alert",
+            "crit",
+            "err",
+            "warning",
+            "notice",
+            "info",
+            "debug"
+          ],
+          "description": "Optional Proxmox inbound firewall log level."
+        }
+      }
+    },
+    "pci_devices": {
+      "type": "array",
+      "title": "PCI / GPU Devices",
+      "items": {
+        "type": "object",
+        "title": "PCI Device",
+        "properties": {
+          "mapping": {
+            "type": "string",
+            "title": "PCI Mapping"
+          },
+          "mdev": {
+            "type": "string",
+            "title": "Mediated Device (MDev)"
+          },
+          "pcie": {
+            "type": "boolean",
+            "title": "PCI Express (PCIe)",
+            "default": true
+          },
+          "primary_gpu": {
+            "type": "boolean",
+            "title": "Primary GPU (x-vga)",
+            "default": false
+          },
+          "rombar": {
+            "type": "boolean",
+            "title": "ROM BAR",
+            "default": true
           }
         },
-        "usb_devices": {
-          "type": "array",
-          "title": "USB Devices",
-          "maxItems": 15,
-          "items": {
-            "type": "object",
-            "title": "USB Device",
-            "properties": {
-              "mapping": {
-                "type": "string",
-                "title": "USB Mapping",
-                "minLength": 1
-              },
-              "usb3": {
-                "type": "boolean",
-                "title": "USB 3.0",
-                "default": true
-              }
-            },
-            "required": [
-              "mapping"
-            ]
+        "required": [
+          "mapping"
+        ]
+      }
+    },
+    "usb_devices": {
+      "type": "array",
+      "title": "USB Devices",
+      "maxItems": 15,
+      "items": {
+        "type": "object",
+        "title": "USB Device",
+        "properties": {
+          "mapping": {
+            "type": "string",
+            "title": "USB Mapping",
+            "minLength": 1
+          },
+          "usb3": {
+            "type": "boolean",
+            "title": "USB 3.0",
+            "default": true
           }
-        }
+        },
+        "required": [
+          "mapping"
+        ]
       }
     }
   }

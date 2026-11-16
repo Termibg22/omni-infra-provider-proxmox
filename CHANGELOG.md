@@ -1,3 +1,13 @@
+## [Omni Infra Provider Proxmox 4.1.2](https://github.com/Termibg22/omni-infra-provider-proxmox/tree/v4.1.2)
+
+- Restore flat Machine Class fields, existing boot disk/primary NIC controls and all advanced options in unmodified Omni.
+- Avoid Omni 1.13.3 writing NaN/null for absent numeric fields; keep numeric limits in validation subschemas.
+- Explain every workload profile and the meaning of blank/default fields.
+- Build node choices only from current node inventory; discard obsolete mapping/group/storage references.
+- Offer VM disk storage only when enabled, active and `images`-capable; reject container-only, inactive and disabled targets at provisioning time too.
+- Preserve the last complete schema when node/storage discovery fails.
+- Document hosted Omni limitations: provider schemas cannot add tabs, preselect ignored defaults or preserve browser drafts across page reloads.
+
 ## [Omni Infra Provider Proxmox 4.1.1](https://github.com/Termibg22/omni-infra-provider-proxmox/tree/v4.1.1) (2026-11-16)
 
 ### Usability

@@ -239,7 +239,7 @@ func init() {
 	rootCmd.Flags().DurationVar(&cfg.schemaRefreshInterval, "schema-refresh-interval", 2*time.Minute, "interval for refreshing dynamic Proxmox cluster options in Omni schema (0 to disable)")
 	rootCmd.Flags().DurationVar(&cfg.machineSetSyncInterval, "machineset-sync-interval", 0, "opt-in interval for applying MachineRequest changes to existing VMs (0 disables live updates)")
 
-	rootCmd.Flags().StringVar(&cfg.schemaMode, "schema-mode", "basic", "Omni form detail: basic or advanced (existing YAML fields are preserved)")
+	rootCmd.Flags().StringVar(&cfg.schemaMode, "schema-mode", "basic", "compatibility setting: basic and advanced both expose all supported fields")
 
 	// Read everything into this config file
 	rootCmd.Flags().StringVar(&cfg.configFile, "config-file", "", "Proxmox provider config")

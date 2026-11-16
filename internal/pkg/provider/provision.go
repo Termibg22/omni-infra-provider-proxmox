@@ -1646,7 +1646,7 @@ func pickNode(nodeInfoList []nodeStatus) nodeStatus {
 }
 
 func diskStorageUsable(storage *proxmox.Storage) bool {
-	if storage == nil || storage.Enabled == 0 {
+	if storage == nil || storage.Enabled == 0 || storage.Active == 0 {
 		return false
 	}
 
