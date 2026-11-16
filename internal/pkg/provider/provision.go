@@ -18,6 +18,7 @@ import (
 
 	"cel.dev/cel-go/cel"
 	"github.com/cosi-project/runtime/pkg/controller"
+	"github.com/cosi-project/runtime/pkg/state"
 	"github.com/google/uuid"
 	"github.com/luthermonson/go-proxmox"
 	"github.com/siderolabs/omni/client/pkg/imagefactory"
@@ -25,6 +26,7 @@ import (
 	"github.com/siderolabs/omni/client/pkg/omni/resources/infra"
 	siderocel "github.com/siderolabs/talos/pkg/machinery/cel"
 	"go.uber.org/zap"
+	"go.yaml.in/yaml/v4"
 
 	"github.com/siderolabs/omni-infra-provider-proxmox/api/specs"
 	"github.com/siderolabs/omni-infra-provider-proxmox/internal/pkg/provider/ha"
@@ -65,6 +67,7 @@ type Provisioner struct {
 	proxmoxClient         *proxmox.Client
 	scheduler             *scheduler
 	ipAllocator           *ipPoolAllocator
+	machineState          state.State
 	customNodeGroups      map[string][]string
 	pendingISODownloads   map[string]string
 	pendingVMIDs          map[int]time.Time
@@ -73,6 +76,7 @@ type Provisioner struct {
 	pendingISODownloadsMu sync.Mutex
 	poolMu                sync.Mutex
 	vmidMu                sync.Mutex
+	ipAllocationMu        sync.Mutex
 }
 
 // NewProvisioner creates a new provisioner.
@@ -110,6 +114,10 @@ func (p *Provisioner) ProvisionSteps() []provision.Step[*resources.Machine] {
 			}
 
 			data.ApplyWorkloadProfile()
+
+			if err := data.Validate(); err != nil {
+				return err
+			}
 
 			nodes, err := p.proxmoxClient.Nodes(ctx)
 			if err != nil {
@@ -249,9 +257,9 @@ func (p *Provisioner) ProvisionSteps() []provision.Step[*resources.Machine] {
 			var pickedNode nodeStatus
 
 			if inSet {
-				pickedNode = p.scheduler.pick(nodeInfoList, machineRequestSet, pctx.GetRequestID(), data.Memory*1024*1024, strategy, materialized)
+				pickedNode = p.scheduler.pick(nodeInfoList, machineRequestSet, pctx.GetRequestID(), cmp.Or(data.Memory, uint64(4096))*1024*1024, strategy, materialized)
 			} else {
-				pickedNode = pickNode(nodeInfoList)
+				pickedNode = selectNode(strategy, nodeInfoList, cmp.Or(data.Memory, uint64(4096))*1024*1024)
 			}
 
 			pctx.State.TypedSpec().Value.Node = pickedNode.Name
@@ -607,33 +615,7 @@ func (p *Provisioner) ProvisionSteps() []provision.Step[*resources.Machine] {
 				})
 			}
 
-			// Add PCI device passthrough using Resource Mappings
-			for i, pci := range data.PCIDevices {
-				var pciParts []string
-
-				pciParts = append(pciParts, fmt.Sprintf("mapping=%s", pci.Mapping))
-				if pci.PCIExpress {
-					pciParts = append(pciParts, "pcie=1")
-				}
-
-				if pci.PrimaryGPU {
-					pciParts = append(pciParts, "x-vga=1")
-				}
-
-				if pci.ROMBar {
-					pciParts = append(pciParts, "rombar=1")
-				}
-
-				if pci.MDev != "" {
-					pciParts = append(pciParts, fmt.Sprintf("mdev=%s", pci.MDev))
-				}
-
-				pciString := strings.Join(pciParts, ",")
-				vmOptions = append(vmOptions, proxmox.VirtualMachineOption{
-					Name:  fmt.Sprintf("hostpci%d", i), // hostpci0, hostpci1, etc.
-					Value: pciString,
-				})
-			}
+			vmOptions = append(vmOptions, buildPCIDeviceOptions(data.PCIDevices)...)
 
 			vmOptions = append(vmOptions, buildUSBDeviceOptions(data.USBDevices)...)
 			vmOptions = append(vmOptions, buildEnterpriseVMOptions(data)...)
@@ -646,10 +628,20 @@ func (p *Provisioner) ProvisionSteps() []provision.Step[*resources.Machine] {
 			pctx.State.TypedSpec().Value.VmCreateTask = string(task.UPID)
 			pctx.State.TypedSpec().Value.Vmid = int32(vmid)
 			pctx.SetMachineInfraID(fmt.Sprintf("%s/%d", pctx.State.TypedSpec().Value.Node, vmid))
-			applyDiskVolumeConfigPatches(ctx, logger, pctx, effectiveDisks)
 
 			return provision.NewRetryInterval(time.Second * 10)
 		}),
+		provision.NewStep("configureVolumes", func(ctx context.Context, logger *zap.Logger, pctx provision.Context[*resources.Machine]) error {
+			var data Data
+			if err := pctx.UnmarshalProviderData(&data); err != nil {
+				return err
+			}
+
+			data.ApplyWorkloadProfile()
+
+			return applyDiskVolumeConfigPatches(ctx, logger, pctx, data.EffectiveDisks())
+		}),
+		provision.NewStep("allocateIPs", p.allocateMachineIPs),
 		provision.NewStep("startVM", func(ctx context.Context, logger *zap.Logger, pctx provision.Context[*resources.Machine]) error {
 			if failure := pctx.State.TypedSpec().Value.Failure; failure != "" {
 				return errors.New(failure)
@@ -710,40 +702,33 @@ func (p *Provisioner) ProvisionSteps() []provision.Step[*resources.Machine] {
 				}
 			}
 
-			applyVMFirewallOptions(ctx, logger, vm, data.FirewallOptions)
-			applySecurityGroups(ctx, logger, vm, data.SecurityGroups)
-			p.reconcileReplicationJob(ctx, logger, spec.Vmid, spec.Node, data)
+			if firewallErr := p.applyVMFirewallOptions(ctx, logger, vm, data.FirewallOptions); firewallErr != nil {
+				return firewallErr
+			}
+
+			if groupErr := applySecurityGroups(ctx, logger, vm, data.SecurityGroups); groupErr != nil {
+				return groupErr
+			}
+
+			if replicationErr := p.reconcileReplicationJob(ctx, logger, spec.Vmid, spec.Node, data); replicationErr != nil {
+				return replicationErr
+			}
 
 			effectiveNICs := data.EffectiveNICs()
 			allocatedIPs := make(map[int]string, len(effectiveNICs))
 
-			for i, nic := range effectiveNICs {
-				if nic.IPPool != "" {
-					poolKey := fmt.Sprintf("nic%d:%s", i, nic.IPPool)
-					p.seedIPPoolFromCluster(ctx, poolKey, spec.Vmid)
+			allocations, err := readIPAllocations(pctx.State)
+			if err != nil {
+				return err
+			}
 
-					ipCIDR, allocErr := p.ipAllocator.Allocate(poolKey, pctx.GetRequestID())
-					if allocErr != nil {
-						return fmt.Errorf("failed to allocate IP from ip_pool for NIC %d: %w", i, allocErr)
-					}
-
-					allocatedIPs[i] = ipCIDR
-				}
+			for i := range effectiveNICs {
+				allocatedIPs[i] = allocations[fmt.Sprintf("nic%d", i)].Address
 			}
 
 			for i := range data.Bonds {
-				if data.Bonds[i].IPPool != "" {
-					poolKey := fmt.Sprintf("bond%d:%s", i, data.Bonds[i].IPPool)
-					p.seedIPPoolFromCluster(ctx, poolKey, spec.Vmid)
-
-					ipCIDR, allocErr := p.ipAllocator.Allocate(poolKey, pctx.GetRequestID())
-					if allocErr != nil {
-						return fmt.Errorf("failed to allocate IP from ip_pool for bond %d: %w", i, allocErr)
-					}
-
-					if !slices.Contains(data.Bonds[i].Addresses, ipCIDR) {
-						data.Bonds[i].Addresses = append([]string{ipCIDR}, data.Bonds[i].Addresses...)
-					}
+				if addr := allocations[fmt.Sprintf("bond%d", i)].Address; addr != "" && !slices.Contains(data.Bonds[i].Addresses, addr) {
+					data.Bonds[i].Addresses = append([]string{addr}, data.Bonds[i].Addresses...)
 				}
 			}
 
@@ -791,21 +776,23 @@ hostname: %s`,
 
 			return provision.NewRetryInterval(time.Second * 1)
 		}),
-		provision.NewStep("registerHA", p.ha.RegisterStep),
-		provision.NewStep("syncHARules", func(ctx context.Context, logger *zap.Logger, pctx provision.Context[*resources.Machine]) error {
-			var data Data
-			if err := pctx.UnmarshalProviderData(&data); err == nil && data.HA != nil && data.NodeGroup != "" && len(data.HA.NodeAffinityNodes) == 0 {
-				if groupNodes, groupErr := p.resolveNodeGroupNodes(ctx, data.NodeGroup); groupErr == nil && len(groupNodes) > 0 {
-					set, _ := pctx.GetMachineRequestSetID()
-					sid := fmt.Sprintf("vm:%d", pctx.State.TypedSpec().Value.Vmid)
-					cfg := *data.HA
-					cfg.NodeAffinityNodes = groupNodes
-
-					return p.ha.SyncRules(ctx, logger, set, sid, cfg)
-				}
+		provision.NewStep("registerHA", p.registerHAStep),
+		provision.NewStep("syncHARules", p.syncHARulesStep),
+		provision.NewStep("recordProviderData", func(_ context.Context, _ *zap.Logger, pctx provision.Context[*resources.Machine]) error {
+			var raw map[string]any
+			if err := pctx.UnmarshalProviderData(&raw); err != nil {
+				return err
 			}
 
-			return p.ha.SyncRulesStep(ctx, logger, pctx)
+			encoded, err := yaml.Marshal(raw)
+			if err != nil {
+				return err
+			}
+
+			pctx.State.Metadata().Annotations().Set(providerDataHashAnnotation, hashProviderData(string(encoded)))
+			pctx.State.Metadata().Annotations().Set(appliedProviderDataAnnotation, string(encoded))
+
+			return nil
 		}),
 	}
 }
@@ -815,13 +802,16 @@ func (p *Provisioner) Deprovision(ctx context.Context, logger *zap.Logger, machi
 	// release up front: a request torn down before its VM materializes returns
 	// at the Vmid == 0 check below.
 	p.scheduler.release(machineRequest.Metadata().ID())
-	p.ipAllocator.Release(machineRequest.Metadata().ID())
 
 	if machine.TypedSpec().Value.Vmid == 0 {
+		p.ipAllocator.Release(machineRequest.Metadata().ID())
+
 		return nil
 	}
 
-	p.cleanupReplicationJobs(ctx, logger, machine.TypedSpec().Value.Vmid)
+	if err := p.cleanupReplicationJobs(ctx, logger, machine.TypedSpec().Value.Vmid); err != nil {
+		return err
+	}
 
 	if err := p.ha.Deprovision(ctx, logger, machine); err != nil {
 		return err
@@ -843,10 +833,25 @@ func (p *Provisioner) Deprovision(ctx context.Context, logger *zap.Logger, machi
 		}
 	} else {
 		node = machine.TypedSpec().Value.Node
+
 		found = node != ""
+		if found {
+			if _, err := p.getVM(ctx, node, machine.TypedSpec().Value.Vmid); err != nil {
+				if !isAlreadyGoneErr(err) {
+					return err
+				}
+
+				node, found, err = p.ha.FindVMNode(ctx, machine.TypedSpec().Value.Vmid)
+				if err != nil {
+					return err
+				}
+			}
+		}
 	}
 
 	if !found {
+		p.ipAllocator.Release(machineRequest.Metadata().ID())
+
 		if pool := machine.TypedSpec().Value.Pool; pool != "" {
 			p.cleanupPool(ctx, logger, pool)
 		}
@@ -857,6 +862,8 @@ func (p *Provisioner) Deprovision(ctx context.Context, logger *zap.Logger, machi
 	if err := p.destroyVM(ctx, logger, node, machine.TypedSpec().Value.Vmid); err != nil {
 		return err
 	}
+
+	p.ipAllocator.Release(machineRequest.Metadata().ID())
 
 	if pool := machine.TypedSpec().Value.Pool; pool != "" {
 		p.cleanupPool(ctx, logger, pool)
@@ -890,8 +897,19 @@ func (p *Provisioner) allocateVMID(ctx context.Context, cluster *proxmox.Cluster
 		return 0, err
 	}
 
-	for {
+	for vmid <= 999999999 {
 		if _, inFlight := p.pendingVMIDs[vmid]; !inFlight {
+			free, checkErr := p.checkVMIDFree(ctx, vmid)
+			if checkErr != nil {
+				return 0, checkErr
+			}
+
+			if !free {
+				vmid++
+
+				continue
+			}
+
 			p.pendingVMIDs[vmid] = now
 
 			return vmid, nil
@@ -899,6 +917,8 @@ func (p *Provisioner) allocateVMID(ctx context.Context, cluster *proxmox.Cluster
 
 		vmid++
 	}
+
+	return 0, fmt.Errorf("no free VMID available")
 }
 
 func (p *Provisioner) allocateVMIDInRange(ctx context.Context, cluster *proxmox.Cluster, minID, maxID int, now time.Time) (int, error) {
@@ -927,14 +947,6 @@ func (p *Provisioner) allocateVMIDInRange(ctx context.Context, cluster *proxmox.
 
 		free, err := p.checkVMIDFree(ctx, candidate)
 		if err != nil {
-			// If /cluster/nextid?vmid= is unsupported on a mock server when /cluster/resources already succeeded,
-			// trust the used map if we got cluster resources.
-			if len(used) > 0 {
-				p.pendingVMIDs[candidate] = now
-
-				return candidate, nil
-			}
-
 			return 0, err
 		}
 
@@ -980,33 +992,6 @@ func (p *Provisioner) checkVMIDFree(ctx context.Context, vmid int) (bool, error)
 	}
 
 	return true, nil
-}
-
-// seedIPPoolFromCluster ensures existing VMs with lower VMIDs have their deterministic
-// IP pool allocations registered so IP assignments remain collision-free across provider restarts.
-func (p *Provisioner) seedIPPoolFromCluster(ctx context.Context, poolKey string, currentVMID int32) {
-	cluster := new(proxmox.Cluster).New(p.proxmoxClient)
-
-	resources, err := cluster.Resources(ctx, "vm")
-	if err != nil {
-		return
-	}
-
-	slices.SortFunc(resources, func(a, b *proxmox.ClusterResource) int {
-		if a == nil || b == nil {
-			return 0
-		}
-
-		return cmp.Compare(a.VMID, b.VMID)
-	})
-
-	for _, r := range resources {
-		if r == nil || r.Template != 0 || r.Name == "" || int32(r.VMID) >= currentVMID {
-			continue
-		}
-
-		_, _ = p.ipAllocator.Allocate(poolKey, r.Name) //nolint:errcheck
-	}
 }
 
 func hasClusterTag(tags, want string) bool {
@@ -1083,8 +1068,13 @@ func formatDiskOptionValue(disk Disk, storage, bus string) string {
 		opts = append(opts, "backup=0")
 	}
 
-	if disk.Replicate {
-		opts = append(opts, "replicate=1")
+	if disk.Replicate != nil {
+		value := 0
+		if *disk.Replicate {
+			value = 1
+		}
+
+		opts = append(opts, fmt.Sprintf("replicate=%d", value))
 	}
 
 	opts = appendDiskQoSAndSerial(opts, disk)
@@ -1333,7 +1323,7 @@ func (p *Provisioner) resolveStorage(ctx context.Context, node *proxmox.Node, di
 
 	if directStorage != "" {
 		for _, st := range storages {
-			if st.Name == directStorage {
+			if st != nil && st.Name == directStorage && diskStorageUsable(st) {
 				return st.Name, nil
 			}
 		}
@@ -1346,6 +1336,9 @@ func (p *Provisioner) resolveStorage(ctx context.Context, node *proxmox.Node, di
 
 func matchStorage(nodeName string, storages proxmox.Storages, selector string) (string, error) {
 	selector = strings.TrimSpace(selector)
+	storages = slices.DeleteFunc(slices.Clone(storages), func(st *proxmox.Storage) bool { return !diskStorageUsable(st) })
+	slices.SortFunc(storages, func(a, b *proxmox.Storage) int { return cmp.Compare(a.Name, b.Name) })
+
 	if selector == "" {
 		// If neither storage nor storage_selector was provided, pick the first enabled images-capable storage on the node
 		for _, storage := range storages {
@@ -1498,6 +1491,17 @@ func (p *Provisioner) destroyVM(ctx context.Context, logger *zap.Logger, node st
 		return err
 	}
 
+	if vm.VirtualMachineConfig != nil && bool(vm.VirtualMachineConfig.Protection) {
+		task, cfgErr := vm.Config(ctx, proxmox.VirtualMachineOption{Name: "protection", Value: 0})
+		if cfgErr != nil {
+			return fmt.Errorf("failed to clear VM %d protection: %w", vmid, cfgErr)
+		}
+
+		if cfgErr = p.waitForTaskToFinish(ctx, task); cfgErr != nil {
+			return cfgErr
+		}
+	}
+
 	if !vm.IsStopped() {
 		task, stopErr := vm.Stop(ctx)
 		if stopErr != nil {
@@ -1521,6 +1525,10 @@ func (p *Provisioner) destroyVM(ctx context.Context, logger *zap.Logger, node st
 var taskPollInterval = time.Second * 5
 
 func (p *Provisioner) waitForTaskToFinish(ctx context.Context, t *proxmox.Task) error {
+	if t == nil {
+		return fmt.Errorf("proxmox returned an empty task; cannot verify operation completion")
+	}
+
 	ticker := time.NewTicker(taskPollInterval)
 
 	defer ticker.Stop()
@@ -1635,4 +1643,18 @@ func pickNode(nodeInfoList []nodeStatus) nodeStatus {
 	})
 
 	return nodeInfoList[0]
+}
+
+func diskStorageUsable(storage *proxmox.Storage) bool {
+	if storage == nil || storage.Enabled == 0 {
+		return false
+	}
+
+	for content := range strings.SplitSeq(storage.Content, ",") {
+		if strings.TrimSpace(content) == "images" {
+			return true
+		}
+	}
+
+	return false
 }

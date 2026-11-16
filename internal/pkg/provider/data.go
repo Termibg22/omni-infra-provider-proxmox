@@ -132,14 +132,15 @@ type PassthroughSection struct {
 
 // Data is the provider custom machine config.
 type Data struct {
-	General     *GeneralSection     `yaml:"general,omitempty"`
-	OS          *OSSection          `yaml:"os,omitempty"`
-	System      *SystemSection      `yaml:"system,omitempty"`
-	Compute     *ComputeSection     `yaml:"compute,omitempty"`
-	Network     *NetworkSection     `yaml:"network,omitempty"`
-	Firewall    *FirewallSection    `yaml:"firewall,omitempty"`
-	Passthrough *PassthroughSection `yaml:"passthrough,omitempty"`
-	Balloon     *bool               `yaml:"balloon,omitempty"`
+	explicitFields map[string]bool
+	General        *GeneralSection     `yaml:"general,omitempty"`
+	OS             *OSSection          `yaml:"os,omitempty"`
+	System         *SystemSection      `yaml:"system,omitempty"`
+	Compute        *ComputeSection     `yaml:"compute,omitempty"`
+	Network        *NetworkSection     `yaml:"network,omitempty"`
+	Firewall       *FirewallSection    `yaml:"firewall,omitempty"`
+	Passthrough    *PassthroughSection `yaml:"passthrough,omitempty"`
+	Balloon        *bool               `yaml:"balloon,omitempty"`
 	// HA registers the VM as a Proxmox HA resource; its presence also hands placement to HA (pickNode stops spreading the set).
 	HA               *ha.Config         `yaml:"ha,omitempty"`
 	Replication      *ReplicationConfig `yaml:"replication,omitempty"`
@@ -207,6 +208,7 @@ type Data struct {
 	Protection        bool             `yaml:"protection,omitempty"`
 	SerialConsole     bool             `yaml:"serial_console,omitempty"`
 	normalized        bool
+	haDisabled        bool
 }
 
 func stripSentinel(v string) string {
@@ -243,8 +245,13 @@ func (d *Data) normalizeGeneralAndOS() {
 		d.Pool = cmp.Or(g.Pool, d.Pool)
 		d.Description = cmp.Or(g.Description, d.Description)
 		d.MinVMID = cmp.Or(g.MinVMID, d.MinVMID)
+
 		d.MaxVMID = cmp.Or(g.MaxVMID, d.MaxVMID)
-		d.Protection = g.Protection || d.Protection
+		if d.explicitFields["general.protection"] {
+			d.Protection = g.Protection
+		} else {
+			d.Protection = g.Protection || d.Protection
+		}
 
 		if g.OnBoot != nil && d.OnBoot == nil {
 			d.OnBoot = g.OnBoot
@@ -287,10 +294,25 @@ func (d *Data) normalizeSystemAndCompute() {
 		d.VGA = cmp.Or(s.VGA, d.VGA)
 		d.WatchdogModel = cmp.Or(s.WatchdogModel, d.WatchdogModel)
 		d.WatchdogAction = cmp.Or(s.WatchdogAction, d.WatchdogAction)
+
 		d.StartupOrder = cmp.Or(s.StartupOrder, d.StartupOrder)
-		d.SecureBoot = s.SecureBoot || d.SecureBoot
-		d.TPM = s.TPM || d.TPM
-		d.SerialConsole = s.SerialConsole || d.SerialConsole
+		if d.explicitFields["system.secure_boot"] {
+			d.SecureBoot = s.SecureBoot
+		} else {
+			d.SecureBoot = s.SecureBoot || d.SecureBoot
+		}
+
+		if d.explicitFields["system.tpm"] {
+			d.TPM = s.TPM
+		} else {
+			d.TPM = s.TPM || d.TPM
+		}
+
+		if d.explicitFields["system.serial_console"] {
+			d.SerialConsole = s.SerialConsole
+		} else {
+			d.SerialConsole = s.SerialConsole || d.SerialConsole
+		}
 
 		if s.RNG != nil && d.RNG == nil {
 			d.RNG = s.RNG
@@ -305,8 +327,13 @@ func (d *Data) normalizeSystemAndCompute() {
 		d.Hugepages = cmp.Or(c.Hugepages, d.Hugepages)
 		d.Memory = cmp.Or(c.Memory, d.Memory)
 		d.CPULimit = cmp.Or(c.CPULimit, d.CPULimit)
+
 		d.CPUUnits = cmp.Or(c.CPUUnits, d.CPUUnits)
-		d.NUMA = c.NUMA || d.NUMA
+		if d.explicitFields["compute.numa"] {
+			d.NUMA = c.NUMA
+		} else {
+			d.NUMA = c.NUMA || d.NUMA
+		}
 
 		if c.Balloon != nil && d.Balloon == nil {
 			d.Balloon = c.Balloon
@@ -373,19 +400,19 @@ func (d *Data) normalizeSentinels() {
 	}
 
 	if d.HA != nil {
-		d.HA.State = stripSentinel(d.HA.State)
-		d.HA.Group = stripSentinel(d.HA.Group)
-		d.HA.ResourceAffinity = stripSentinel(d.HA.ResourceAffinity)
-
-		if d.HA.State == "" && d.HA.Group == "" && d.HA.ResourceAffinity == "" &&
-			len(d.HA.Rules) == 0 && len(d.HA.NodeAffinityNodes) == 0 && d.HA.Comment == "" {
+		if strings.TrimSpace(d.HA.State) == "none" {
+			d.haDisabled = true
 			d.HA = nil
-		}
-	}
 
-	if d.FirewallOptions != nil && (d.FirewallOptions.Enable == nil || !*d.FirewallOptions.Enable) &&
-		d.FirewallOptions.PolicyIn == "ACCEPT" && d.FirewallOptions.PolicyOut == "ACCEPT" {
-		d.FirewallOptions = nil
+			return
+		}
+
+		d.HA.Group = stripSentinel(d.HA.Group)
+
+		d.HA.ResourceAffinity = stripSentinel(d.HA.ResourceAffinity)
+		if d.HA.ResourceAffinity == "anti-affinity" {
+			d.HA.ResourceAffinity = "negative"
+		}
 	}
 }
 
@@ -398,32 +425,47 @@ func (d *Data) ApplyWorkloadProfile() {
 	case "control-plane":
 		d.StartupOrder = cmp.Or(d.StartupOrder, "order=1,up=30")
 		d.WatchdogModel = cmp.Or(d.WatchdogModel, "i6300esb")
+
 		d.WatchdogAction = cmp.Or(d.WatchdogAction, "reset")
-		d.Protection = true
+		if !d.isExplicit("protection") {
+			d.Protection = true
+		}
 
 		if d.RNG == nil {
 			t := true
 			d.RNG = &t
 		}
 
-		if d.HA == nil {
+		if d.HA == nil && !d.haDisabled {
 			d.HA = &ha.Config{
 				State:            "started",
-				ResourceAffinity: "anti-affinity",
+				ResourceAffinity: "negative",
 			}
 		}
 	case "storage-node":
 		d.SCSIHW = cmp.Or(d.SCSIHW, "virtio-scsi-single")
 		d.DiskCache = cmp.Or(d.DiskCache, "none")
+
 		d.DiskAIO = cmp.Or(d.DiskAIO, "io_uring")
-		d.DiskSSD = true
-		d.DiskDiscard = true
-		d.DiskIOThread = true
+		if !d.isExplicit("disk_ssd") {
+			d.DiskSSD = true
+		}
+
+		if !d.isExplicit("disk_discard") {
+			d.DiskDiscard = true
+		}
+
+		if !d.isExplicit("disk_iothread") {
+			d.DiskIOThread = true
+		}
 	case "gpu-ai-worker":
 		d.MachineType = cmp.Or(d.MachineType, "q35")
 		d.CPUType = cmp.Or(d.CPUType, "host")
+
 		d.Bios = cmp.Or(d.Bios, "ovmf")
-		d.NUMA = true
+		if !d.isExplicit("numa") {
+			d.NUMA = true
+		}
 
 		if d.Balloon == nil {
 			f := false
@@ -431,9 +473,17 @@ func (d *Data) ApplyWorkloadProfile() {
 		}
 	case "hardened-secure":
 		d.Bios = cmp.Or(d.Bios, "ovmf")
-		d.SecureBoot = true
-		d.TPM = true
-		d.Protection = true
+		if !d.isExplicit("secure_boot") {
+			d.SecureBoot = true
+		}
+
+		if !d.isExplicit("tpm") {
+			d.TPM = true
+		}
+
+		if !d.isExplicit("protection") {
+			d.Protection = true
+		}
 
 		if d.RNG == nil {
 			t := true
@@ -486,6 +536,8 @@ func (d *Data) ParsedTemplateVMID() (int, string) {
 
 // Disk represents a flexible VM disk configuration (primary or additional).
 type Disk struct {
+	Replicate       *bool `yaml:"replicate,omitempty"`
+	explicitFields  map[string]bool
 	Backup          *bool   `yaml:"backup,omitempty"`
 	Storage         string  `yaml:"storage,omitempty"`
 	StorageSelector string  `yaml:"storage_selector,omitempty"`
@@ -507,7 +559,6 @@ type Disk struct {
 	DiskDiscard     bool    `yaml:"disk_discard,omitempty"`
 	IOThread        bool    `yaml:"iothread,omitempty"`
 	DiskIOThread    bool    `yaml:"disk_iothread,omitempty"`
-	Replicate       bool    `yaml:"replicate,omitempty"`
 }
 
 // EffectiveSize returns Size or falls back to DiskSize (and default 20GB if both are 0).
@@ -575,11 +626,11 @@ type NIC struct {
 
 // PCIDevice represents a PCI device passthrough configuration using Proxmox Resource Mappings.
 type PCIDevice struct {
+	ROMBar     *bool  `yaml:"rombar,omitempty"`      // Enable ROM BAR (default true, set false to disable)
 	Mapping    string `yaml:"mapping"`               // Resource mapping name (e.g., nvidia-gpu-1)
 	MDev       string `yaml:"mdev"`                  // Mediated device name (e.g., nvidia-180)
 	PCIExpress bool   `yaml:"pcie,omitempty"`        // Use PCIe instead of PCI (recommended for GPUs)
 	PrimaryGPU bool   `yaml:"primary_gpu,omitempty"` // Set as primary GPU (x-vga=1)
-	ROMBar     bool   `yaml:"rombar,omitempty"`      // Enable ROM BAR (default true, set false to disable)
 }
 
 // USBDevice represents a USB device passthrough configuration using Proxmox Resource Mappings.
@@ -618,10 +669,19 @@ func (d *Data) EffectiveDisks() []Disk {
 
 			if d.WorkloadProfile == "storage-node" {
 				disk.Cache = cmp.Or(disk.Cache, disk.DiskCache, d.DiskCache)
+
 				disk.AIO = cmp.Or(disk.AIO, disk.DiskAIO, d.DiskAIO)
-				disk.SSD = true
-				disk.Discard = true
-				disk.IOThread = true
+				if !disk.explicitFields["ssd"] && !disk.explicitFields["disk_ssd"] && !d.isExplicit("disk_ssd") {
+					disk.SSD = true
+				}
+
+				if !disk.explicitFields["discard"] && !disk.explicitFields["disk_discard"] && !d.isExplicit("disk_discard") {
+					disk.Discard = true
+				}
+
+				if !disk.explicitFields["iothread"] && !disk.explicitFields["disk_iothread"] && !d.isExplicit("disk_iothread") {
+					disk.IOThread = true
+				}
 			}
 
 			disks = append(disks, disk)

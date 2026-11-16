@@ -1,6 +1,8 @@
 name: Build and Publish Container Image
 
 on:
+  pull_request:
+    branches: [main]
   push:
     branches:
       - main
@@ -9,11 +11,31 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: write
-  packages: write
+  contents: read
 
 jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+      - name: Unit tests and race detector
+        run: go test -race ./...
+      - name: Static analysis
+        run: go vet ./...
+      - name: Build supported architectures
+        run: |
+          GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -o /tmp/provider-amd64 ./cmd/omni-infra-provider-proxmox
+          GOOS=linux GOARCH=arm64 CGO_ENABLED=0 go build -o /tmp/provider-arm64 ./cmd/omni-infra-provider-proxmox
+
   build-and-push:
+    needs: verify
+    if: github.event_name != 'pull_request'
+    permissions:
+      contents: read
+      packages: write
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
@@ -38,10 +60,13 @@ jobs:
           SHA_SHORT=$(git rev-parse --short HEAD)
           if [[ "${GITHUB_REF}" == refs/tags/* ]]; then
             VERSION_TAG="${GITHUB_REF#refs/tags/}"
-            TAGS="-t ${IMAGE_REPO}:${VERSION_TAG} -t ${IMAGE_REPO}:latest"
+            TAGS="-t ${IMAGE_REPO}:${VERSION_TAG}"
+            if [[ "${VERSION_TAG}" != *-* ]]; then
+              TAGS="${TAGS} -t ${IMAGE_REPO}:latest"
+            fi
           else
             VERSION_TAG="main-${SHA_SHORT}"
-            TAGS="-t ${IMAGE_REPO}:${VERSION_TAG} -t ${IMAGE_REPO}:latest"
+            TAGS="-t ${IMAGE_REPO}:${VERSION_TAG} -t ${IMAGE_REPO}:edge"
           fi
           echo "version_tag=${VERSION_TAG}" >> "$GITHUB_OUTPUT"
           echo "sha_short=${SHA_SHORT}" >> "$GITHUB_OUTPUT"

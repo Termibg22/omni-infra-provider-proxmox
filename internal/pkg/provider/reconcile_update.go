@@ -9,6 +9,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"slices"
 	"strconv"
@@ -127,30 +128,56 @@ func reconcileSingleProvisionedRequest(
 		return
 	}
 
-	// On first observation of a newly provisioned machine where no hash annotation was recorded yet,
-	// still run the idempotent reconcile so any post-provision edits are applied, then persist the hash.
-	if err := prov.ReconcileExistingMachine(ctx, logger, machine, req); err != nil {
+	// Adopt legacy machines without changing their hardware on first observation.
+	if currentHash == "" {
+		_, err = safe.StateUpdateWithConflicts(ctx, st, machine.Metadata(), func(m *resources.Machine) error {
+			m.Metadata().Annotations().Set(providerDataHashAnnotation, desiredHash)
+			m.Metadata().Annotations().Set(appliedProviderDataAnnotation, req.TypedSpec().Value.ProviderData)
+
+			return nil
+		})
+		if err != nil {
+			logger.Warn("failed to record initial provider data", zap.Error(err))
+		}
+
+		return
+	}
+
+	if reconcileErr := prov.ReconcileExistingMachine(ctx, logger, machine, req); reconcileErr != nil {
 		logger.Warn("failed to reconcile MachineSet update on existing VM",
 			zap.String("requestID", reqID),
 			zap.Int32("vmid", machine.TypedSpec().Value.Vmid),
-			zap.Error(err),
+			zap.Error(reconcileErr),
 		)
 
 		return
 	}
 
-	_, _ = safe.StateUpdateWithConflicts(ctx, st, machine.Metadata(), func(m *resources.Machine) error { //nolint:errcheck
+	_, err = safe.StateUpdateWithConflicts(ctx, st, machine.Metadata(), func(m *resources.Machine) error {
 		m.TypedSpec().Value.Node = machine.TypedSpec().Value.Node
 		m.TypedSpec().Value.Pool = machine.TypedSpec().Value.Pool
 		m.TypedSpec().Value.HaRegistered = machine.TypedSpec().Value.HaRegistered
 		m.Metadata().Annotations().Set(providerDataHashAnnotation, desiredHash)
+		m.Metadata().Annotations().Set(appliedProviderDataAnnotation, req.TypedSpec().Value.ProviderData)
 
 		return nil
 	})
+	if err != nil {
+		logger.Warn("failed to persist reconciled machine state", zap.String("requestID", reqID), zap.Error(err))
+	}
 }
 
 func hashProviderData(providerData string) string {
-	sum := sha256.Sum256([]byte(strings.TrimSpace(providerData)))
+	var value map[string]any
+
+	canonical := []byte(strings.TrimSpace(providerData))
+	if yaml.Unmarshal(canonical, &value) == nil {
+		if encoded, err := json.Marshal(value); err == nil {
+			canonical = encoded
+		}
+	}
+
+	sum := sha256.Sum256(canonical)
 
 	return hex.EncodeToString(sum[:])
 }
@@ -183,12 +210,26 @@ func (p *Provisioner) ReconcileExistingMachine(
 
 	data.ApplyWorkloadProfile()
 
+	if previous, ok := machine.Metadata().Annotations().Get(appliedProviderDataAnnotation); ok {
+		if err := validateLiveUpdate(previous, data); err != nil {
+			return err
+		}
+	}
+
+	if err := data.Validate(); err != nil {
+		return err
+	}
+
 	vm, currentNode, err := p.locateExistingVM(ctx, spec.Node, spec.Vmid)
 	if err != nil {
 		return err
 	}
 
 	spec.Node = currentNode
+
+	if bootErr := validateExistingBootSlot(vm, data.EffectiveDisks()); bootErr != nil {
+		return bootErr
+	}
 
 	// 1. Reconcile node / node_group placement (live-migrate if node or node_group changed)
 	vm, err = p.reconcileVMNodePlacement(ctx, logger, machine, vm, data)
@@ -218,13 +259,26 @@ func (p *Provisioner) ReconcileExistingMachine(
 			return poolErr
 		}
 
+		// ensurePool only creates the pool; membership must be moved in Proxmox too.
+		if err := p.proxmoxClient.Put(ctx, "/pools", map[string]any{"poolid": poolValue, "vms": fmt.Sprint(spec.Vmid), "allow-move": 1}, nil); err != nil {
+			return fmt.Errorf("failed to move VM %d to pool %q: %w", spec.Vmid, poolValue, err)
+		}
+
 		spec.Pool = poolValue
 	}
 
 	// 5. Reconcile Firewall Options, Security Groups, and Storage Replication Jobs
-	applyVMFirewallOptions(ctx, logger, vm, data.FirewallOptions)
-	reconcileVMSecurityGroups(ctx, logger, vm, data.SecurityGroups)
-	p.reconcileReplicationJob(ctx, logger, spec.Vmid, spec.Node, data)
+	if err := p.applyVMFirewallOptions(ctx, logger, vm, data.FirewallOptions); err != nil {
+		return err
+	}
+
+	if err := reconcileVMSecurityGroups(ctx, logger, vm, data.SecurityGroups); err != nil {
+		return err
+	}
+
+	if err := p.reconcileReplicationJob(ctx, logger, spec.Vmid, spec.Node, data); err != nil {
+		return err
+	}
 
 	// 6. Reconcile Proxmox HA registration and node-affinity / resource-affinity rules
 	return p.reconcileVMHA(ctx, logger, machine, data, machineRequestSet)
@@ -343,12 +397,20 @@ func (p *Provisioner) desiredNodeForExistingVM(ctx context.Context, logger *zap.
 }
 
 func (p *Provisioner) reconcileVMDisks(ctx context.Context, logger *zap.Logger, vm *proxmox.VirtualMachine, data Data) error {
+	return p.reconcileVMDisksWithPolicy(ctx, logger, vm, data, true)
+}
+
+func (p *Provisioner) reconcileVMDisksWithPolicy(ctx context.Context, logger *zap.Logger, vm *proxmox.VirtualMachine, data Data, detach bool) error {
 	node, err := p.proxmoxClient.Node(ctx, vm.Node)
 	if err != nil {
 		return err
 	}
 
 	effectiveDisks := data.EffectiveDisks()
+	if err := validateExistingBootSlot(vm, effectiveDisks); err != nil {
+		return err
+	}
+
 	resolvedStorages := make([]string, len(effectiveDisks))
 
 	for i, d := range effectiveDisks {
@@ -392,7 +454,7 @@ func (p *Provisioner) reconcileVMDisks(ctx context.Context, logger *zap.Logger, 
 
 		// Existing disk: preserve its volume ID (e.g. "local-lvm:vm-100-disk-0") and update flags if needed
 		updatedSpec := buildUpdatedExistingDiskSpec(currentSpec, fmt.Sprint(opt.Value))
-		if updatedSpec != "" && updatedSpec != stripSizeFromDiskSpec(currentSpec) {
+		if updatedSpec != stripSizeFromDiskSpec(currentSpec) {
 			attachOrUpdateOpts = append(attachOrUpdateOpts, proxmox.VirtualMachineOption{
 				Name:  slot,
 				Value: updatedSpec,
@@ -436,6 +498,10 @@ func (p *Provisioner) reconcileVMDisks(ctx context.Context, logger *zap.Logger, 
 	bootSlot := "scsi0"
 	if len(newDiskOptions) > 0 {
 		bootSlot = newDiskOptions[0].Name
+	}
+
+	if !detach {
+		return nil
 	}
 
 	// Detach secondary disks that were removed from the MachineSet (never detach the primary boot disk or ide* CD-ROMs)
@@ -484,12 +550,26 @@ func buildUpdatedExistingDiskSpec(existingSpec, desiredCreationSpec string) stri
 		return ""
 	}
 
-	_, desiredFlags, hasFlags := strings.Cut(desiredCreationSpec, ",")
-	if !hasFlags || desiredFlags == "" {
-		return volID
+	managed := map[string]bool{
+		"ssd": true, "discard": true, "iothread": true, "cache": true, "aio": true, "backup": true,
+		"replicate": true, "serial": true, "iops_rd": true, "iops_wr": true, "mbps_rd": true, "mbps_wr": true,
+	}
+	parts := []string{volID}
+
+	_, oldFlags, _ := strings.Cut(existingSpec, ",")
+	for flag := range strings.SplitSeq(oldFlags, ",") {
+		key, _, _ := strings.Cut(flag, "=")
+		if flag != "" && key != "size" && !managed[key] {
+			parts = append(parts, flag)
+		}
 	}
 
-	return volID + "," + desiredFlags
+	_, desiredFlags, _ := strings.Cut(desiredCreationSpec, ",")
+	if desiredFlags != "" {
+		parts = append(parts, strings.Split(desiredFlags, ",")...)
+	}
+
+	return strings.Join(parts, ",")
 }
 
 func stripSizeFromDiskSpec(spec string) string {
@@ -573,19 +653,16 @@ func (p *Provisioner) reconcileVMConfigOptions(
 		{Name: "memory", Value: cmp.Or(data.Memory, uint64(4096))},
 		{Name: "onboot", Value: onBoot},
 		{Name: "protection", Value: protection},
-	}
-
-	if data.Description != "" {
-		vmOptions = append(vmOptions, proxmox.VirtualMachineOption{Name: "description", Value: data.Description})
+		{Name: "description", Value: data.Description},
+		{Name: "cpulimit", Value: data.CPULimit},
 	}
 
 	if data.VGA != "" {
 		vmOptions = append(vmOptions, proxmox.VirtualMachineOption{Name: "vga", Value: data.VGA})
 	}
 
-	if tagsVal, ok := buildTagsOption(data.Tags, machineRequestSet); ok {
-		vmOptions = append(vmOptions, proxmox.VirtualMachineOption{Name: "tags", Value: tagsVal})
-	}
+	tagsVal := existingVMDesiredTags(vm, data.Tags, machineRequestSet)
+	vmOptions = append(vmOptions, proxmox.VirtualMachineOption{Name: "tags", Value: tagsVal})
 
 	vmOptions = append(vmOptions, buildNICOptions(effectiveNICs)...)
 	vmOptions = append(vmOptions, buildPCIDeviceOptions(data.PCIDevices)...)
@@ -623,8 +700,8 @@ func buildPCIDeviceOptions(devices []PCIDevice) []proxmox.VirtualMachineOption {
 			pciParts = append(pciParts, "x-vga=1")
 		}
 
-		if pci.ROMBar {
-			pciParts = append(pciParts, "rombar=1")
+		if pci.ROMBar != nil && !*pci.ROMBar {
+			pciParts = append(pciParts, "rombar=0")
 		}
 
 		if pci.MDev != "" {
@@ -684,14 +761,10 @@ func parseIndexedDeviceSlot(key, prefix string) (int, bool) {
 	return n, true
 }
 
-func reconcileVMSecurityGroups(ctx context.Context, logger *zap.Logger, vm *proxmox.VirtualMachine, desiredGroups []string) {
+func reconcileVMSecurityGroups(ctx context.Context, logger *zap.Logger, vm *proxmox.VirtualMachine, desiredGroups []string) error {
 	existingRules, err := vm.FirewallRules(ctx)
 	if err != nil {
-		if len(desiredGroups) > 0 {
-			logger.Debug("failed to list VM firewall rules during security_groups reconciliation", zap.Error(err))
-		}
-
-		return
+		return fmt.Errorf("failed to list VM firewall rules: %w", err)
 	}
 
 	desiredSet := make(map[string]struct{}, len(desiredGroups))
@@ -703,20 +776,18 @@ func reconcileVMSecurityGroups(ctx context.Context, logger *zap.Logger, vm *prox
 
 	// Remove security group rules that are no longer in desiredGroups (iterate in reverse position order)
 	for _, r := range slices.Backward(existingRules) {
-		if r == nil || r.Type != "group" {
+		if r == nil || r.Type != "group" || r.Comment != poolComment {
 			continue
 		}
 
 		if _, keep := desiredSet[r.Action]; !keep {
 			if delErr := r.Delete(ctx); delErr != nil {
-				logger.Warn("failed to remove deselected firewall security group from VM",
-					zap.String("securityGroup", r.Action), zap.Int("vmid", int(vm.VMID)), zap.Error(delErr))
+				return fmt.Errorf("failed to remove managed security group %q: %w", r.Action, delErr)
 			}
 		}
 	}
 
-	// Add newly requested security groups
-	applySecurityGroups(ctx, logger, vm, desiredGroups)
+	return applySecurityGroups(ctx, logger, vm, desiredGroups)
 }
 
 func (p *Provisioner) reconcileVMHA(
@@ -759,4 +830,56 @@ func (p *Provisioner) reconcileVMHA(
 	}
 
 	return p.ha.ReconcileNodeAffinityRule(ctx, machineRequestSet, cfg)
+}
+
+func validateExistingBootSlot(vm *proxmox.VirtualMachine, effectiveDisks []Disk) error {
+	if vm.VirtualMachineConfig == nil {
+		return nil
+	}
+
+	cfg := vm.VirtualMachineConfig
+	desired := effectiveDisks[0].EffectiveBus() + "0"
+
+	disks := cfg.MergeDisks()
+	if _, exists := disks[desired]; !exists {
+		return fmt.Errorf("changing the boot disk bus/slot on an existing VM is not supported")
+	}
+
+	order, ok := strings.CutPrefix(cfg.Boot, "order=")
+	if !ok {
+		return nil
+	}
+
+	for slot := range strings.SplitSeq(order, ";") {
+		spec, exists := disks[slot]
+		if !exists || strings.Contains(spec, "media=cdrom") {
+			continue
+		}
+
+		if slot != desired {
+			return fmt.Errorf("requested boot slot %q differs from existing boot disk %q", desired, slot)
+		}
+
+		break
+	}
+
+	return nil
+}
+
+func existingVMDesiredTags(vm *proxmox.VirtualMachine, userTags []string, set string) string {
+	tags := slices.Clone(userTags)
+	cloudInitTag := proxmox.MakeTag(proxmox.TagCloudInit)
+
+	current := vm.Tags
+	if vm.VirtualMachineConfig != nil {
+		current += ";" + vm.VirtualMachineConfig.Tags
+	}
+
+	if hasClusterTag(current, cloudInitTag) && !slices.Contains(tags, cloudInitTag) {
+		tags = append(tags, cloudInitTag)
+	}
+
+	value, _ := buildTagsOption(tags, set)
+
+	return value
 }

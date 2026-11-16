@@ -1,3 +1,24 @@
+## [Omni Infra Provider Proxmox 4.1.1](https://github.com/Termibg22/omni-infra-provider-proxmox/tree/v4.1.1) (2026-11-16)
+
+### Usability
+
+- Add a basic four-section Omni form and an optional advanced form with `--schema-mode advanced`.
+- Preserve schema field order, validate connection settings early, and correct configuration examples.
+
+### Reliability
+
+- Persist IP allocations in Omni and check every VMID candidate before allocation.
+- Preserve existing disks during clone retries and restrict Talos volume selectors to their intended disk.
+- Normalize HA configuration, support explicit false values, and clear VM protection during provider teardown.
+- Preserve administrator-owned firewall and replication rules, and retain the Cloud-Init cleanup tag.
+- Disable live VM updates by default and reject unsupported updates instead of recording false success.
+
+### Verification and publishing
+
+- Add 23 regression and validation tests.
+- Run tests with the race detector, static analysis, and both Linux architecture builds before publishing containers.
+- Publish main builds as `edge`; stable version tags update `latest`.
+
 ## [Omni Infra Provider Proxmox 0.3.0](https://github.com/siderolabs/omni-infra-provider-proxmox/releases/tag/v0.3.0) (2026-09-16)
 
 Welcome to the v0.3.0 release of Omni Infra Provider Proxmox!

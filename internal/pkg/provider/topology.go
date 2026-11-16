@@ -117,7 +117,7 @@ func normalizeGroupNodes(raw []string) []string {
 // 2. Nodes that possess the requested PCI/USB resource mappings when hardware passthrough is requested.
 func (p *Provisioner) filterNodesByGroupAndTopology(
 	ctx context.Context,
-	logger *zap.Logger,
+	_ *zap.Logger,
 	nodes proxmox.NodeStatuses,
 	data Data,
 ) (proxmox.NodeStatuses, error) {
@@ -146,11 +146,11 @@ func (p *Provisioner) filterNodesByGroupAndTopology(
 	// If PCI or USB passthrough mappings are requested, prefer nodes where all requested mappings exist
 	if len(data.PCIDevices) > 0 || len(data.USBDevices) > 0 {
 		hwFiltered := p.filterNodesWithHardwareMappings(ctx, candidates, data)
-		if len(hwFiltered) > 0 {
-			candidates = hwFiltered
-		} else {
-			logger.Debug("no node matched all PCI/USB mappings during pre-filtering, keeping group candidates")
+		if len(hwFiltered) == 0 {
+			return nil, fmt.Errorf("no node provides all requested PCI/USB mappings")
 		}
+
+		candidates = hwFiltered
 	}
 
 	return candidates, nil
@@ -181,7 +181,7 @@ func (p *Provisioner) filterNodesWithHardwareMappings(ctx context.Context, candi
 	}
 
 	if len(allowedByMapping) == 0 {
-		return candidates
+		return nil
 	}
 
 	var matched proxmox.NodeStatuses
@@ -199,18 +199,14 @@ func (p *Provisioner) filterNodesWithHardwareMappings(ctx context.Context, candi
 
 func nodeHasAllMappings(nodeName string, data Data, allowedByMapping map[string][]string) bool {
 	for _, pci := range data.PCIDevices {
-		if nodes, ok := allowedByMapping["pci:"+pci.Mapping]; ok && len(nodes) > 0 {
-			if !slices.Contains(nodes, nodeName) {
-				return false
-			}
+		if nodes := allowedByMapping["pci:"+pci.Mapping]; !slices.Contains(nodes, nodeName) {
+			return false
 		}
 	}
 
 	for _, usb := range data.USBDevices {
-		if nodes, ok := allowedByMapping["usb:"+usb.Mapping]; ok && len(nodes) > 0 {
-			if !slices.Contains(nodes, nodeName) {
-				return false
-			}
+		if nodes := allowedByMapping["usb:"+usb.Mapping]; !slices.Contains(nodes, nodeName) {
+			return false
 		}
 	}
 
@@ -265,7 +261,6 @@ func (p *Provisioner) cloneFromTemplate(
 	pctx.State.TypedSpec().Value.VmCreateTask = string(task.UPID)
 	pctx.State.TypedSpec().Value.Vmid = int32(vmid)
 	pctx.SetMachineInfraID(fmt.Sprintf("%s/%d", targetNode, vmid))
-	applyDiskVolumeConfigPatches(ctx, logger, pctx, data.EffectiveDisks())
 
 	return provision.NewRetryInterval(time.Second * 10)
 }
@@ -279,7 +274,7 @@ func (p *Provisioner) findTemplateVM(ctx context.Context, data Data) (*proxmox.V
 	cluster := new(proxmox.Cluster).New(p.proxmoxClient)
 	if resources, err := cluster.Resources(ctx, "vm"); err == nil {
 		for _, r := range resources {
-			if r == nil || r.Node == "" {
+			if r == nil || r.Node == "" || r.Template != 1 {
 				continue
 			}
 
@@ -296,14 +291,23 @@ func (p *Provisioner) findTemplateVM(ctx context.Context, data Data) (*proxmox.V
 		}
 
 		if found {
-			return p.getVM(ctx, nodeName, int32(tplID))
+			vm, getErr := p.getVM(ctx, nodeName, int32(tplID))
+			if getErr != nil {
+				return nil, getErr
+			}
+
+			if vm.VirtualMachineConfig == nil || !bool(vm.VirtualMachineConfig.Template) {
+				return nil, fmt.Errorf("VM %d is not a template", tplID)
+			}
+
+			return vm, nil
 		}
 	}
 
 	return nil, fmt.Errorf("proxmox VM template %q not found in cluster", rawSpec)
 }
 
-// applyClonedVMConfigAndResize applies CPU, memory, NICs, additional disks, firmware, and tags
+// applyClonedVMConfigAndResize applies CPU, memory, NICs, additional disks and tags
 // onto a newly cloned VM and resizes the primary boot disk if the requested size exceeds the template's disk.
 func (p *Provisioner) applyClonedVMConfigAndResize(
 	ctx context.Context,
@@ -312,23 +316,6 @@ func (p *Provisioner) applyClonedVMConfigAndResize(
 	vm *proxmox.VirtualMachine,
 	data Data,
 ) error {
-	node, err := p.proxmoxClient.Node(ctx, vm.Node)
-	if err != nil {
-		return err
-	}
-
-	effectiveDisks := data.EffectiveDisks()
-	resolvedStorages := make([]string, len(effectiveDisks))
-
-	for i, d := range effectiveDisks {
-		st, pickErr := p.resolveStorage(ctx, node, d.Storage, d.StorageSelector)
-		if pickErr != nil {
-			return fmt.Errorf("failed to resolve storage for disk %d on cloned VM: %w", i, pickErr)
-		}
-
-		resolvedStorages[i] = st
-	}
-
 	onBoot := 1
 	if data.OnBoot != nil && !*data.OnBoot {
 		onBoot = 0
@@ -361,12 +348,6 @@ func (p *Provisioner) applyClonedVMConfigAndResize(
 	vmOptions = append(vmOptions, buildUSBDeviceOptions(data.USBDevices)...)
 	vmOptions = append(vmOptions, buildEnterpriseVMOptions(data)...)
 
-	// Attach any additional disks beyond the template's primary disk (scsi1, scsi2, ...)
-	if len(effectiveDisks) > 1 {
-		allDiskOpts := buildDiskOptions(effectiveDisks, resolvedStorages)
-		vmOptions = append(vmOptions, allDiskOpts[1:]...)
-	}
-
 	machineRequestSet, _ := pctx.GetMachineRequestSetID()
 	if tagsVal, ok := buildTagsOption(data.Tags, machineRequestSet); ok {
 		vmOptions = append(vmOptions, proxmox.VirtualMachineOption{Name: "tags", Value: tagsVal})
@@ -381,19 +362,9 @@ func (p *Provisioner) applyClonedVMConfigAndResize(
 		return fmt.Errorf("failed waiting for cloned VM %d configuration task: %w", vm.VMID, err)
 	}
 
-	if len(effectiveDisks) > 0 && effectiveDisks[0].EffectiveSize() > 0 {
-		primaryDiskName := fmt.Sprintf("%s0", effectiveDisks[0].EffectiveBus())
-		sizeSpec := fmt.Sprintf("%dG", effectiveDisks[0].EffectiveSize())
-
-		if resizeTask, resizeErr := vm.ResizeDisk(ctx, primaryDiskName, sizeSpec); resizeErr != nil {
-			logger.Debug("skipping disk resize on cloned VM (disk may already be >= target size)",
-				zap.String("disk", primaryDiskName), zap.String("size", sizeSpec), zap.Error(resizeErr))
-		} else if waitErr := p.waitForTaskToFinish(ctx, resizeTask); waitErr != nil {
-			logger.Debug("disk resize task on cloned VM reported non-fatal error", zap.Error(waitErr))
-		}
-	}
-
-	return nil
+	// Re-read disks on every retry and preserve existing volume IDs. Reissuing
+	// allocation strings after a partial failure would replace attached disks.
+	return p.reconcileVMDisksWithPolicy(ctx, logger, vm, data, false)
 }
 
 func buildCPUOptionValue(data Data) string {
@@ -407,14 +378,14 @@ func buildCPUOptionValue(data Data) string {
 	return fmt.Sprintf("%s,flags=%s", cpuType, flags)
 }
 
-func applySecurityGroups(ctx context.Context, logger *zap.Logger, vm *proxmox.VirtualMachine, groups []string) {
+func applySecurityGroups(ctx context.Context, _ *zap.Logger, vm *proxmox.VirtualMachine, groups []string) error {
 	if len(groups) == 0 {
-		return
+		return nil
 	}
 
 	existingRules, err := vm.FirewallRules(ctx)
 	if err != nil {
-		logger.Warn("failed to read existing VM firewall rules for security_groups", zap.Error(err))
+		return fmt.Errorf("failed to read VM firewall rules: %w", err)
 	}
 
 	existingGroups := map[string]struct{}{}
@@ -436,14 +407,18 @@ func applySecurityGroups(ctx context.Context, logger *zap.Logger, vm *proxmox.Vi
 		}
 
 		if err := vm.NewFirewallRule(ctx, &proxmox.FirewallRule{
-			Type:   "group",
-			Action: sg,
-			Enable: 1,
+			Type:    "group",
+			Comment: poolComment,
+			Action:  sg,
+			Enable:  1,
 		}); err != nil {
-			logger.Warn("failed to attach Proxmox firewall security group to VM",
-				zap.String("securityGroup", sg), zap.Int("vmid", int(vm.VMID)), zap.Error(err))
+			return fmt.Errorf("failed to attach security group %q to VM %d: %w", sg, vm.VMID, err)
 		}
+
+		existingGroups[sg] = struct{}{}
 	}
+
+	return nil
 }
 
 func buildEnterpriseVMOptions(data Data) []proxmox.VirtualMachineOption {
@@ -493,99 +468,112 @@ func buildEnterpriseVMOptions(data Data) []proxmox.VirtualMachineOption {
 	return opts
 }
 
-func applyVMFirewallOptions(ctx context.Context, logger *zap.Logger, vm *proxmox.VirtualMachine, fw *VMFirewallOptions) {
+func (p *Provisioner) applyVMFirewallOptions(ctx context.Context, _ *zap.Logger, vm *proxmox.VirtualMachine, fw *VMFirewallOptions) error {
 	if fw == nil {
-		return
+		return nil
+	}
+	// Use an explicit map: go-proxmox's omitempty boolean fields drop false,
+	// so disabling a previously enabled firewall option would otherwise do nothing.
+	opts := map[string]any{}
+
+	for name, value := range map[string]*bool{"enable": fw.Enable, "dhcp": fw.DHCP, "macfilter": fw.MACFilter, "ipfilter": fw.IPFilter, "ndp": fw.NDP, "radv": fw.Radv} {
+		if value != nil {
+			n := 0
+			if *value {
+				n = 1
+			}
+
+			opts[name] = n
+		}
 	}
 
-	opt := &proxmox.FirewallVirtualMachineOption{
-		PolicyIn:   fw.PolicyIn,
-		PolicyOut:  fw.PolicyOut,
-		LogLevelIn: fw.LogLevelIn,
+	if fw.PolicyIn != "" {
+		opts["policy_in"] = fw.PolicyIn
 	}
 
-	if fw.Enable != nil {
-		opt.Enable = proxmox.IntOrBool(*fw.Enable)
+	if fw.PolicyOut != "" {
+		opts["policy_out"] = fw.PolicyOut
 	}
 
-	if fw.DHCP != nil {
-		opt.Dhcp = proxmox.IntOrBool(*fw.DHCP)
+	if fw.LogLevelIn != "" {
+		opts["log_level_in"] = fw.LogLevelIn
 	}
 
-	if fw.MACFilter != nil {
-		mf := proxmox.IntOrBool(*fw.MACFilter)
-		opt.Macfilter = &mf
+	if len(opts) == 0 {
+		return nil
 	}
 
-	if fw.IPFilter != nil {
-		opt.Ipfilter = proxmox.IntOrBool(*fw.IPFilter)
+	if err := p.proxmoxClient.Put(ctx, fmt.Sprintf("/nodes/%s/qemu/%d/firewall/options", vm.Node, vm.VMID), opts, nil); err != nil {
+		return fmt.Errorf("failed to configure VM %d firewall: %w", vm.VMID, err)
 	}
 
-	if fw.NDP != nil {
-		opt.NDP = proxmox.IntOrBool(*fw.NDP)
-	}
-
-	if fw.Radv != nil {
-		opt.Radv = proxmox.IntOrBool(*fw.Radv)
-	}
-
-	if err := vm.FirewallOptionSet(ctx, opt); err != nil {
-		logger.Warn("failed to set Proxmox VM firewall options", zap.Int("vmid", int(vm.VMID)), zap.Error(err))
-	}
+	return nil
 }
 
-func (p *Provisioner) reconcileReplicationJob(ctx context.Context, logger *zap.Logger, vmid int32, currentNode string, data Data) {
-	if vmid == 0 {
-		return
+func (p *Provisioner) reconcileReplicationJob(ctx context.Context, logger *zap.Logger, vmid int32, currentNode string, data Data) error {
+	if vmid == 0 || data.Replication == nil {
+		return nil
 	}
 
-	if data.Replication == nil || !data.Replication.Enabled {
-		p.cleanupReplicationJobs(ctx, logger, vmid)
-
-		return
+	if !data.Replication.Enabled {
+		return p.cleanupReplicationJobs(ctx, logger, vmid)
 	}
 
 	targetNode := strings.TrimSpace(data.Replication.TargetNode)
-	if targetNode == "" || targetNode == currentNode {
+	if targetNode == "" {
 		targetNode = p.pickReplicationTargetNode(ctx, currentNode, data)
 	}
 
 	if targetNode == "" || targetNode == currentNode {
-		logger.Debug("no secondary node available for storage replication job", zap.Int32("vmid", vmid))
-
-		return
+		return fmt.Errorf("replication for VM %d requires a different eligible target node", vmid)
 	}
 
 	jobID := fmt.Sprintf("%d-0", vmid)
 	schedule := cmp.Or(strings.TrimSpace(data.Replication.Schedule), "*/15")
 	cluster := new(proxmox.Cluster).New(p.proxmoxClient)
 
-	jobOpts := &proxmox.ReplicationJobOptions{
-		ID:       jobID,
-		Type:     "local",
-		Target:   targetNode,
-		Schedule: &schedule,
-		Comment:  poolComment,
+	jobs, err := cluster.ReplicationJobs(ctx)
+	if err != nil {
+		return fmt.Errorf("failed to list replication jobs: %w", err)
 	}
+
+	var rate *proxmox.StringOrFloat64
 
 	if data.Replication.RateLimit > 0 {
-		rate := proxmox.StringOrFloat64(data.Replication.RateLimit)
-		jobOpts.Rate = &rate
+		value := proxmox.StringOrFloat64(data.Replication.RateLimit)
+		rate = &value
 	}
 
-	if err := cluster.NewReplicationJob(ctx, jobOpts); err != nil {
-		if strings.Contains(err.Error(), "already exists") {
-			_ = cluster.ReplicationJobUpdate(ctx, jobID, &proxmox.ReplicationJobUpdateOption{ //nolint:errcheck
-				Schedule: &schedule,
-				Comment:  poolComment,
-				Rate:     jobOpts.Rate,
-			})
-
-			return
+	for _, job := range jobs {
+		if job == nil || job.ID != jobID {
+			continue
 		}
 
-		logger.Warn("failed to configure Proxmox storage replication job", zap.String("jobID", jobID), zap.Error(err))
+		if job.Comment != poolComment {
+			return fmt.Errorf("replication job %q is not managed by this provider", jobID)
+		}
+
+		if job.Target != targetNode {
+			return fmt.Errorf("changing replication target on existing job %q requires recreating the job", jobID)
+		}
+
+		opts := &proxmox.ReplicationJobUpdateOption{Schedule: &schedule, Comment: poolComment, Rate: rate}
+		if rate == nil {
+			opts.Delete = "rate"
+		}
+
+		if err := cluster.ReplicationJobUpdate(ctx, jobID, opts); err != nil {
+			return fmt.Errorf("failed to update replication job %q: %w", jobID, err)
+		}
+
+		return nil
 	}
+
+	if err := cluster.NewReplicationJob(ctx, &proxmox.ReplicationJobOptions{ID: jobID, Type: "local", Target: targetNode, Schedule: &schedule, Comment: poolComment, Rate: rate}); err != nil {
+		return fmt.Errorf("failed to create replication job %q: %w", jobID, err)
+	}
+
+	return nil
 }
 
 func (p *Provisioner) pickReplicationTargetNode(ctx context.Context, currentNode string, data Data) string {
@@ -610,29 +598,33 @@ func (p *Provisioner) pickReplicationTargetNode(ctx context.Context, currentNode
 	return ""
 }
 
-func (p *Provisioner) cleanupReplicationJobs(ctx context.Context, logger *zap.Logger, vmid int32) {
+func (p *Provisioner) cleanupReplicationJobs(ctx context.Context, _ *zap.Logger, vmid int32) error {
 	if vmid == 0 {
-		return
+		return nil
 	}
 
 	cluster := new(proxmox.Cluster).New(p.proxmoxClient)
 
 	jobs, err := cluster.ReplicationJobs(ctx)
 	if err != nil {
-		return
+		return fmt.Errorf("failed to list replication jobs during cleanup: %w", err)
 	}
 
 	prefix := fmt.Sprintf("%d-", vmid)
-	for _, j := range jobs {
-		if j != nil && strings.HasPrefix(j.ID, prefix) {
-			if delErr := cluster.ReplicationJobDelete(ctx, j.ID, true, false); delErr != nil {
-				logger.Debug("failed to delete VM replication job during deprovision", zap.String("jobID", j.ID), zap.Error(delErr))
-			}
+	for _, job := range jobs {
+		if job == nil || !strings.HasPrefix(job.ID, prefix) || job.Comment != poolComment {
+			continue
+		}
+
+		if err := cluster.ReplicationJobDelete(ctx, job.ID, true, false); err != nil {
+			return fmt.Errorf("failed to delete managed replication job %q: %w", job.ID, err)
 		}
 	}
+
+	return nil
 }
 
-func applyDiskVolumeConfigPatches(ctx context.Context, logger *zap.Logger, pctx provision.Context[*resources.Machine], disks []Disk) {
+func applyDiskVolumeConfigPatches(ctx context.Context, _ *zap.Logger, pctx provision.Context[*resources.Machine], disks []Disk) error {
 	// Disk 0 is the system boot disk; disks[1..] are additional data disks
 	for i := 1; i < len(disks); i++ {
 		volName := strings.TrimSpace(disks[i].VolumeName)
@@ -640,28 +632,36 @@ func applyDiskVolumeConfigPatches(ctx context.Context, logger *zap.Logger, pctx 
 			continue
 		}
 
-		sizeGB := disks[i].EffectiveSize()
-		serial := sanitizeVolumeSerial(volName)
+		patchName, patchYAML := diskVolumeConfigPatch(pctx.GetRequestID(), disks[i])
 
-		matchExpr := fmt.Sprintf("!system_disk && disk.size >= %du * GiB", max(1, sizeGB-1))
-		if serial != "" {
-			matchExpr = fmt.Sprintf("disk.serial == %q || (!system_disk && disk.size >= %du * GiB)", serial, max(1, sizeGB-1))
+		if err := pctx.CreateConfigPatch(ctx, patchName, patchYAML); err != nil {
+			return fmt.Errorf("failed to create UserVolumeConfig patch for %q: %w", volName, err)
 		}
+	}
 
-		patchYAML := fmt.Sprintf(`apiVersion: v1alpha1
+	return nil
+}
+
+func diskVolumeConfigPatch(requestID string, disk Disk) (string, []byte) {
+	volName := strings.TrimSpace(disk.VolumeName)
+	serial := sanitizeVolumeSerial(volName)
+	// Leave room for partition metadata, then grow to use the available space.
+	minSize := "512MiB"
+	if size := disk.EffectiveSize(); size > 1 {
+		minSize = fmt.Sprintf("%dGiB", size-1)
+	}
+
+	patchYAML := fmt.Sprintf(`apiVersion: v1alpha1
 kind: UserVolumeConfig
 name: %s
 provisioning:
   diskSelector:
-    match: '%s'
-  minSize: %dGiB
-`, volName, matchExpr, sizeGB)
+    match: '!system_disk && disk.serial == %q'
+  minSize: %s
+  grow: true
+`, volName, serial, minSize)
 
-		patchName := fmt.Sprintf("900-proxmox-volume-%s", volName)
-		if err := pctx.CreateConfigPatch(ctx, patchName, []byte(patchYAML)); err != nil {
-			logger.Debug("skipping UserVolumeConfig patch creation", zap.String("volume", volName), zap.Error(err))
-		}
-	}
+	return fmt.Sprintf("900-proxmox-volume-%s-%s", requestID, volName), []byte(patchYAML)
 }
 
 func sanitizeVolumeSerial(volName string) string {

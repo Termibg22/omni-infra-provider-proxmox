@@ -436,7 +436,7 @@ func TestEffectiveDisksAndBuildDiskOptions(t *testing.T) {
 				SSD:       true,
 				Discard:   true,
 				Backup:    &noBackup,
-				Replicate: true,
+				Replicate: new(true),
 			},
 			{
 				Storage:  "nvme-pool",
@@ -1175,7 +1175,7 @@ func TestWorkloadProfilesAndExtensions(t *testing.T) {
 	require.Equal(t, "reset", cpData.WatchdogAction)
 	require.True(t, cpData.Protection)
 	require.NotNil(t, cpData.HA)
-	require.Equal(t, "anti-affinity", cpData.HA.ResourceAffinity)
+	require.Equal(t, "negative", cpData.HA.ResourceAffinity)
 
 	stData := provider.Data{
 		WorkloadProfile: "storage-node",

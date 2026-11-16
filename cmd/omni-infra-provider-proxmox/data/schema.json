@@ -4,12 +4,12 @@
   "properties": {
     "general": {
       "type": "object",
-      "title": "01. General",
+      "title": "General",
       "description": "VM placement, node group, workload preset, resource pool, tags, and boot behavior.",
       "properties": {
         "workload_profile": {
           "type": "string",
-          "title": "Workload Profile (Smart Preset)",
+          "title": "Workload Profile",
           "default": "standard",
           "enum": [
             "standard",
@@ -18,7 +18,7 @@
             "gpu-ai-worker",
             "hardened-secure"
           ],
-          "description": "Smart preset that pre-configures optimal defaults and Talos extensions."
+          "description": "Optional defaults for a workload. Advanced settings expose the individual hardware and HA options."
         },
         "node_group": {
           "type": "string",
@@ -98,183 +98,10 @@
         }
       }
     },
-    "os": {
-      "type": "object",
-      "title": "02. OS & Provisioning",
-      "description": "Talos ISO / VM Template source, CPU architecture, system extensions, and kernel arguments.",
-      "properties": {
-        "provisioning_mode": {
-          "type": "string",
-          "title": "Provisioning Mode",
-          "default": "iso",
-          "enum": [
-            "iso",
-            "clone"
-          ],
-          "description": "'iso' boots from a Talos Image Factory ISO; 'clone' clones an existing Proxmox VM Template."
-        },
-        "iso_storage": {
-          "type": "string",
-          "title": "ISO Storage",
-          "default": "auto",
-          "description": "ISO-capable storage for Talos ISO and Cloud-Init images ('auto' picks the first available ISO storage)."
-        },
-        "template_vmid": {
-          "type": "string",
-          "title": "VM Template (Clone Mode)",
-          "default": "none",
-          "description": "Proxmox VM Template to clone when Provisioning Mode is 'clone' ('none' if using ISO mode)."
-        },
-        "full_clone": {
-          "type": "boolean",
-          "title": "Full Clone",
-          "default": true,
-          "description": "Perform a full disk clone (true) or linked clone (false) in clone mode."
-        },
-        "architecture": {
-          "type": "string",
-          "title": "Architecture",
-          "default": "amd64",
-          "enum": [
-            "amd64",
-            "arm64"
-          ],
-          "description": "Target CPU architecture for the Talos installation media."
-        },
-        "talos_extensions": {
-          "type": "array",
-          "title": "Talos System Extensions",
-          "description": "Additional official Talos extensions embedded in the installation ISO (qemu-guest-agent is always included).",
-          "items": {
-            "type": "string",
-            "minLength": 1
-          }
-        },
-        "extra_kernel_args": {
-          "type": "array",
-          "title": "Extra Kernel Arguments",
-          "description": "Additional Linux kernel parameters (e.g. 'intel_iommu=on', 'iommu=pt').",
-          "items": {
-            "type": "string",
-            "minLength": 1
-          }
-        }
-      }
-    },
-    "system": {
-      "type": "object",
-      "title": "03. System & Hardware",
-      "description": "Proxmox VM machine type, UEFI/BIOS firmware, TPM, SCSI controller, display, and watchdog.",
-      "properties": {
-        "machine_type": {
-          "type": "string",
-          "title": "Machine",
-          "default": "q35",
-          "enum": [
-            "q35",
-            "i440fx"
-          ],
-          "description": "QEMU machine type ('q35' recommended for PCIe/GPU passthrough)."
-        },
-        "bios": {
-          "type": "string",
-          "title": "BIOS / Firmware",
-          "default": "seabios",
-          "enum": [
-            "seabios",
-            "ovmf"
-          ],
-          "description": "VM firmware ('ovmf' enables UEFI, EFI disk, and Secure Boot)."
-        },
-        "secure_boot": {
-          "type": "boolean",
-          "title": "UEFI Secure Boot",
-          "default": false,
-          "description": "Enable UEFI Secure Boot (requires BIOS='ovmf')."
-        },
-        "tpm": {
-          "type": "boolean",
-          "title": "TPM 2.0",
-          "default": false,
-          "description": "Attach a virtual TPM 2.0 state device."
-        },
-        "scsihw": {
-          "type": "string",
-          "title": "SCSI Controller",
-          "default": "virtio-scsi-single",
-          "enum": [
-            "virtio-scsi-single",
-            "virtio-scsi-pci",
-            "lsi",
-            "lsi53c810",
-            "megasas",
-            "pvscsi"
-          ],
-          "description": "SCSI controller model ('virtio-scsi-single' recommended for IOThread)."
-        },
-        "vga": {
-          "type": "string",
-          "title": "Display (VGA)",
-          "default": "std",
-          "enum": [
-            "std",
-            "virtio",
-            "virtio-gl",
-            "qxl",
-            "serial0",
-            "none",
-            "cirrus",
-            "vmware"
-          ],
-          "description": "Proxmox display adapter."
-        },
-        "serial_console": {
-          "type": "boolean",
-          "title": "Serial Console (serial0)",
-          "default": false,
-          "description": "Attach a virtual serial socket for Proxmox xterm.js console."
-        },
-        "rng": {
-          "type": "boolean",
-          "title": "VirtIO RNG (/dev/urandom)",
-          "default": true,
-          "description": "Attach VirtIO hardware RNG for fast cryptographic entropy."
-        },
-        "watchdog_model": {
-          "type": "string",
-          "title": "Watchdog Model",
-          "default": "none",
-          "enum": [
-            "none",
-            "i6300esb",
-            "ib700"
-          ],
-          "description": "Optional virtual hardware watchdog device."
-        },
-        "watchdog_action": {
-          "type": "string",
-          "title": "Watchdog Action",
-          "default": "reset",
-          "enum": [
-            "reset",
-            "poweroff",
-            "pause",
-            "debug",
-            "none"
-          ],
-          "description": "Action when the watchdog timer expires."
-        },
-        "startup_order": {
-          "type": "string",
-          "title": "Start/Shutdown Order",
-          "description": "Proxmox startup order (e.g. 'order=1,up=30,down=60')."
-        }
-      }
-    },
     "compute": {
       "type": "object",
-      "title": "04. CPU & Memory",
-      "description": "CPU cores, sockets, model, memory allocation, ballooning, NUMA, and hugepages.",
+      "title": "CPU & Memory",
+      "description": "Defaults: 2 cores, 1 socket and 4096 MB RAM when omitted.",
       "properties": {
         "cores": {
           "type": "integer",
@@ -354,16 +181,12 @@
           "maximum": 262144,
           "description": "Optional relative CPU scheduler weight."
         }
-      },
-      "required": [
-        "cores",
-        "memory"
-      ]
+      }
     },
     "disks": {
       "type": "array",
-      "title": "05. Disks (Boot Disk & Data Disks)",
-      "description": "Unified VM disk list. Entry #1 is the boot disk (scsi0); additional entries are data disks (scsi1, scsi2, ...). Supports live add, remove, and online resize.",
+      "title": "Disks",
+      "description": "First entry is the boot disk; later entries are data disks. An empty list uses a 20 GB boot disk on automatic storage. Changing an existing boot bus is unsupported.",
       "items": {
         "type": "object",
         "title": "Hard Disk",
@@ -442,8 +265,8 @@
           },
           "replicate": {
             "type": "boolean",
-            "title": "Skip Replication",
-            "default": false,
+            "title": "Include in Replication",
+            "default": true,
             "description": "Include disk in Proxmox storage replication"
           },
           "volume_name": {
@@ -479,7 +302,7 @@
     },
     "network": {
       "type": "object",
-      "title": "06. Network",
+      "title": "Network",
       "description": "VM network interfaces (net0, net1, ...), LACP bonds, static IPs / IP pools, and global DNS.",
       "properties": {
         "nics": {
@@ -547,8 +370,7 @@
               },
               "dhcp4": {
                 "type": "boolean",
-                "title": "DHCPv4",
-                "default": true
+                "title": "DHCPv4"
               },
               "dhcp6": {
                 "type": "boolean",
@@ -693,8 +515,7 @@
               },
               "dhcp4": {
                 "type": "boolean",
-                "title": "DHCPv4",
-                "default": true
+                "title": "DHCPv4"
               },
               "ip_pool": {
                 "type": "string",
@@ -734,9 +555,182 @@
         }
       }
     },
+    "os": {
+      "type": "object",
+      "title": "OS & Provisioning",
+      "description": "Talos ISO / VM Template source, CPU architecture, system extensions, and kernel arguments.",
+      "properties": {
+        "provisioning_mode": {
+          "type": "string",
+          "title": "Provisioning Mode",
+          "default": "iso",
+          "enum": [
+            "iso",
+            "clone"
+          ],
+          "description": "'iso' boots from a Talos Image Factory ISO; 'clone' clones an existing Proxmox VM Template."
+        },
+        "iso_storage": {
+          "type": "string",
+          "title": "ISO Storage",
+          "default": "auto",
+          "description": "ISO-capable storage for Talos ISO and Cloud-Init images ('auto' picks the first available ISO storage)."
+        },
+        "template_vmid": {
+          "type": "string",
+          "title": "VM Template (Clone Mode)",
+          "default": "none",
+          "description": "Proxmox VM Template to clone when Provisioning Mode is 'clone' ('none' if using ISO mode)."
+        },
+        "full_clone": {
+          "type": "boolean",
+          "title": "Full Clone",
+          "default": true,
+          "description": "Perform a full disk clone (true) or linked clone (false) in clone mode."
+        },
+        "architecture": {
+          "type": "string",
+          "title": "Architecture",
+          "default": "amd64",
+          "enum": [
+            "amd64",
+            "arm64"
+          ],
+          "description": "Target CPU architecture for the Talos installation media."
+        },
+        "talos_extensions": {
+          "type": "array",
+          "title": "Talos System Extensions",
+          "description": "Additional official Talos extensions embedded in the installation ISO (qemu-guest-agent is always included).",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "extra_kernel_args": {
+          "type": "array",
+          "title": "Extra Kernel Arguments",
+          "description": "Additional Linux kernel parameters (e.g. 'intel_iommu=on', 'iommu=pt').",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        }
+      }
+    },
+    "system": {
+      "type": "object",
+      "title": "System & Hardware",
+      "description": "Proxmox VM machine type, UEFI/BIOS firmware, TPM, SCSI controller, display, and watchdog.",
+      "properties": {
+        "machine_type": {
+          "type": "string",
+          "title": "Machine",
+          "default": "q35",
+          "enum": [
+            "q35",
+            "i440fx"
+          ],
+          "description": "QEMU machine type ('q35' recommended for PCIe/GPU passthrough)."
+        },
+        "bios": {
+          "type": "string",
+          "title": "BIOS / Firmware",
+          "default": "seabios",
+          "enum": [
+            "seabios",
+            "ovmf"
+          ],
+          "description": "VM firmware ('ovmf' enables UEFI, EFI disk, and Secure Boot)."
+        },
+        "secure_boot": {
+          "type": "boolean",
+          "title": "UEFI Secure Boot",
+          "default": false,
+          "description": "Enable UEFI Secure Boot (requires BIOS='ovmf')."
+        },
+        "tpm": {
+          "type": "boolean",
+          "title": "TPM 2.0",
+          "default": false,
+          "description": "Attach a virtual TPM 2.0 state device."
+        },
+        "scsihw": {
+          "type": "string",
+          "title": "SCSI Controller",
+          "default": "virtio-scsi-single",
+          "enum": [
+            "virtio-scsi-single",
+            "virtio-scsi-pci",
+            "lsi",
+            "lsi53c810",
+            "megasas",
+            "pvscsi"
+          ],
+          "description": "SCSI controller model ('virtio-scsi-single' recommended for IOThread)."
+        },
+        "vga": {
+          "type": "string",
+          "title": "Display (VGA)",
+          "default": "std",
+          "enum": [
+            "std",
+            "virtio",
+            "virtio-gl",
+            "qxl",
+            "serial0",
+            "none",
+            "cirrus",
+            "vmware"
+          ],
+          "description": "Proxmox display adapter."
+        },
+        "serial_console": {
+          "type": "boolean",
+          "title": "Serial Console (serial0)",
+          "default": false,
+          "description": "Attach a virtual serial socket for Proxmox xterm.js console."
+        },
+        "rng": {
+          "type": "boolean",
+          "title": "VirtIO RNG (/dev/urandom)",
+          "default": true,
+          "description": "Attach VirtIO hardware RNG for fast cryptographic entropy."
+        },
+        "watchdog_model": {
+          "type": "string",
+          "title": "Watchdog Model",
+          "default": "none",
+          "enum": [
+            "none",
+            "i6300esb",
+            "ib700"
+          ],
+          "description": "Optional virtual hardware watchdog device."
+        },
+        "watchdog_action": {
+          "type": "string",
+          "title": "Watchdog Action",
+          "default": "reset",
+          "enum": [
+            "reset",
+            "poweroff",
+            "pause",
+            "debug",
+            "none"
+          ],
+          "description": "Action when the watchdog timer expires."
+        },
+        "startup_order": {
+          "type": "string",
+          "title": "Start/Shutdown Order",
+          "description": "Proxmox startup order (e.g. 'order=1,up=30,down=60')."
+        }
+      }
+    },
     "ha": {
       "type": "object",
-      "title": "07. High Availability (Proxmox HA)",
+      "title": "High Availability",
       "description": "Register VMs in Proxmox HA (leave State as 'none' to disable HA).",
       "properties": {
         "state": {
@@ -810,7 +804,7 @@
     },
     "replication": {
       "type": "object",
-      "title": "08. Storage Replication (ZFS)",
+      "title": "Storage Replication (ZFS)",
       "description": "Automatic ZFS storage replication across cluster nodes.",
       "properties": {
         "enabled": {
@@ -837,7 +831,7 @@
     },
     "firewall": {
       "type": "object",
-      "title": "09. Firewall & Security",
+      "title": "Firewall & Security",
       "description": "Proxmox cluster security groups and VM-level firewall policy.",
       "properties": {
         "security_groups": {
@@ -908,7 +902,7 @@
     },
     "passthrough": {
       "type": "object",
-      "title": "10. Hardware Passthrough (PCI / USB)",
+      "title": "Hardware Passthrough",
       "description": "PCI/GPU and USB device passthrough via Proxmox Resource Mappings.",
       "properties": {
         "pci_devices": {

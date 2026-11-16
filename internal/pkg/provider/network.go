@@ -117,8 +117,11 @@ func (a *ipPoolAllocator) Allocate(poolSpec, requestID string) (string, error) {
 	}
 
 	used := make(map[netip.Addr]struct{}, len(byReq))
-	for _, addr := range byReq {
-		used[addr] = struct{}{}
+
+	for _, requests := range a.allocations {
+		for _, addr := range requests {
+			used[addr] = struct{}{}
+		}
 	}
 
 	// Build candidate list in range [startAddr, endAddr]
@@ -158,7 +161,11 @@ func (a *ipPoolAllocator) Release(requestID string) {
 	defer a.mu.Unlock()
 
 	for _, byReq := range a.allocations {
-		delete(byReq, requestID)
+		for owner := range byReq {
+			if owner == requestID || strings.HasPrefix(owner, requestID+"/") {
+				delete(byReq, owner)
+			}
+		}
 	}
 }
 
@@ -226,6 +233,10 @@ func parseIPRangePool(spec string) (start, end netip.Addr, prefixBits int, err e
 	p, parseErr := netip.ParsePrefix(fmt.Sprintf("%s/%s", startAddr.String(), strings.TrimSpace(prefixPart)))
 	if parseErr != nil {
 		return netip.Addr{}, netip.Addr{}, 0, fmt.Errorf("invalid prefix length in ip_pool %q: %w", spec, parseErr)
+	}
+
+	if startAddr.BitLen() != endAddr.BitLen() || !p.Masked().Contains(endAddr) {
+		return netip.Addr{}, netip.Addr{}, 0, fmt.Errorf("ip_pool range %q must stay within one subnet and address family", spec)
 	}
 
 	if startAddr.Compare(endAddr) > 0 {
@@ -461,7 +472,7 @@ func hasCustomNetworkConfig(data Data, nics []NIC, allocatedIPByIndex map[int]st
 		if len(nic.Addresses) > 0 || allocatedIPByIndex[i] != "" || nic.IPPool != "" ||
 			nic.Gateway4 != "" || nic.Gateway6 != "" ||
 			len(nic.Nameservers) > 0 || len(nic.SearchDomains) > 0 || len(nic.Routes) > 0 ||
-			(nic.DHCP4 != nil && !*nic.DHCP4) || (nic.DHCP6 != nil && *nic.DHCP6) {
+			nic.MTU > 1 || (nic.DHCP4 != nil && !*nic.DHCP4) || (nic.DHCP6 != nil && *nic.DHCP6) {
 			return true
 		}
 	}
@@ -524,6 +535,14 @@ func buildCloudInitEthernet(
 		eth.Match = &cloudInitMatchV2{MACAddress: mac}
 	}
 
+	if enslavedInBond {
+		eth.Addresses = nil
+		eth.Gateway4 = ""
+		eth.Gateway6 = ""
+
+		return eth, nil
+	}
+
 	if !enslavedInBond {
 		if ns := resolveNICNameservers(index, nic, data); ns != nil {
 			eth.Nameservers = ns
@@ -557,5 +576,59 @@ func resolveNICNameservers(index int, nic NIC, data Data) *cloudInitNameserversV
 	return &cloudInitNameserversV2{
 		Addresses: nsAddrs,
 		Search:    nsSearch,
+	}
+}
+
+// Reserve restores a committed address and refuses conflicting persisted state.
+func (a *ipPoolAllocator) Reserve(pool, owner, address string) error {
+	prefix, err := netip.ParsePrefix(address)
+	if err != nil {
+		return fmt.Errorf("invalid persisted IP address %q: %w", address, err)
+	}
+
+	start, end, bits, err := parseIPPool(strings.TrimSpace(pool))
+	if err != nil {
+		return err
+	}
+
+	addr := prefix.Addr()
+	if prefix.Bits() != bits || addr.Compare(start) < 0 || addr.Compare(end) > 0 {
+		return fmt.Errorf("persisted IP %q is outside pool %q", address, pool)
+	}
+
+	a.mu.Lock()
+	defer a.mu.Unlock()
+
+	for _, requests := range a.allocations {
+		for other, used := range requests {
+			if other != owner && used == addr {
+				return fmt.Errorf("IP %s is already reserved by %q", addr, other)
+			}
+		}
+	}
+
+	pool = strings.TrimSpace(pool)
+	if a.allocations[pool] == nil {
+		a.allocations[pool] = map[string]netip.Addr{}
+	}
+
+	a.allocations[pool][owner] = addr
+
+	return nil
+}
+
+// Drop reservations for resources that have disappeared from durable state.
+// This also handles a cleanup racing with a stale state-list response.
+func (a *ipPoolAllocator) pruneOwners(known map[string]bool) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+
+	for _, requests := range a.allocations {
+		for owner := range requests {
+			boundary := strings.LastIndex(owner, "/")
+			if boundary >= 0 && !known[owner[:boundary]] {
+				delete(requests, owner)
+			}
+		}
 	}
 }

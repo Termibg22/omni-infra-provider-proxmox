@@ -81,6 +81,7 @@ func (f *fakeProxmox) handler() http.Handler {
 	vmPath := fmt.Sprintf("/nodes/%s/qemu/%d", fakeNode, fakeVMID)
 
 	mux := http.NewServeMux()
+	mux.HandleFunc("/cluster/replication", func(w http.ResponseWriter, _ *http.Request) { f.writeData(w, []map[string]any{}) })
 
 	mux.HandleFunc(fmt.Sprintf("/nodes/%s/status", fakeNode), func(w http.ResponseWriter, _ *http.Request) {
 		f.writeData(w, map[string]any{})

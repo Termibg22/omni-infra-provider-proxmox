@@ -749,7 +749,7 @@ func BuildDynamicSchema(baseSchema string, opts ClusterOptions) (string, error) 
 
 	// 02. OS & Provisioning
 	if osProps := nestedProperties(props, "os"); osProps != nil {
-		setEnum(osProps, "iso_storage", withSentinelOption("auto", opts.ISOStorages), firstOrFallback(opts.ISOStorages, "auto"))
+		setEnum(osProps, "iso_storage", withSentinelOption("auto", opts.ISOStorages), "auto")
 		setEnum(osProps, "template_vmid", withSentinelOption("none", opts.Templates), "none")
 	}
 
@@ -764,7 +764,7 @@ func BuildDynamicSchema(baseSchema string, opts ClusterOptions) (string, error) 
 		"disks",
 		"storage",
 		withSentinelOption("auto", opts.DiskStorages),
-		firstOrFallback(opts.DiskStorages, "auto"),
+		"auto",
 	)
 
 	// 06. Network
@@ -791,12 +791,7 @@ func BuildDynamicSchema(baseSchema string, opts ClusterOptions) (string, error) 
 		setArrayObjectPropertyEnum(ptProps, "usb_devices", "mapping", opts.USBMappings, firstOrEmpty(opts.USBMappings))
 	}
 
-	out, err := json.MarshalIndent(root, "", "  ")
-	if err != nil {
-		return "", err
-	}
-
-	return string(out), nil
+	return marshalSchemaInOrder(root, []byte(baseSchema))
 }
 
 func nestedProperties(props map[string]any, objectField string) map[string]any {
@@ -924,14 +919,6 @@ func firstOrEmpty(values []string) string {
 	}
 
 	return ""
-}
-
-func firstOrFallback(values []string, fallback string) string {
-	if len(values) > 0 {
-		return values[0]
-	}
-
-	return fallback
 }
 
 func withSentinelOption(sentinel string, values []string) []string {

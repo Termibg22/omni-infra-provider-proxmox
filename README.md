@@ -1,328 +1,229 @@
 # Omni Infrastructure Provider for Proxmox
 
-Can be used to automatically provision Talos nodes in a Proxmox cluster.
+Provision Talos VMs on Proxmox VE from Omni Machine Classes.
 
-## Requirements
+## Run the provider
 
-- Proxmox VE cluster
-- User account with sufficient permissions to manage VMs and resources (example uses root)
-- Omni account and infrastructure provider key
-- Network connectivity between the infrastructure provider and your Proxmox cluster
+You need a Proxmox cluster, an Omni **infrastructure provider key**, and connectivity from the provider to both APIs.
+Use a Proxmox API token or a username/password pair, with permission to manage the requested VMs, storage, pools, and optional HA resources.
 
-## Running Infrastructure Provider
-
-Create the configuration file for the provider:
+Create `config.yaml`:
 
 ```yaml
 proxmox:
-  username: root
-  password: 123456
-  url: "https://homelab.proxmox:8006/api2/json"
-  insecureSkipVerify: true
-  realm: "pam"
-  # Optional default VMID range for VMs created by Omni:
-  # minVMID: 5000
-  # maxVMID: 5999
-  # Optional logical node groups for topology-aware placement & reactive UI filtering:
-  # nodeGroups:
-  #   rack-a: ["pve1", "pve2"]
-  #   gpu-nodes: ["pve3"]
+  url: https://pve.example.com:8006/api2/json
+  tokenID: provider@pve!omni
+  tokenSecret: REPLACE_ME
+  # Optional allocation range:
+  minVMID: 5000
+  maxVMID: 5999
+  # Optional node groups:
+  nodeGroups:
+    rack-a: [pve1, pve2]
 ```
 
-> **Note:**
->
-> - Replace the `url` value with the address of your own Proxmox server.
-> - You can use a different user instead of `root` if you grant it the necessary permissions to manage resources in your Proxmox cluster.
+For password authentication, replace `tokenID` and `tokenSecret` with `username`, `password`, and `realm` (for example, `pam`).
+Configure exactly one authentication method.
+Certificate verification is enabled by default; `insecureSkipVerify: true` explicitly disables it for Proxmox.
 
-### Using Docker
+Set `OMNI_ENDPOINT` and `OMNI_SERVICE_ACCOUNT_KEY` in your environment.
+Despite its historical name, `OMNI_SERVICE_ACCOUNT_KEY` must contain an **infrastructure provider key**.
 
-> **Note:** The `--omni-service-account-key` flag expects an *infra provider key*, not an Omni service account key.
-> Make sure to provide the correct key type.
-
-Run the provider using Docker:
-
-```bash
-docker run -it -d \
-  -v ./config.yaml:/config.yaml \
-  ghcr.io/termibg22/omni-infra-provider-proxmox:v4.0.0 \
-  --config-file /config.yaml \
-  --omni-api-endpoint https://<account-name>.omni.siderolabs.io/ \
-  --omni-service-account-key <infra-provider-key>
+```sh
+docker run -d --name omni-proxmox --restart unless-stopped \
+  --mount type=bind,source="$(pwd)/config.yaml",target=/config.yaml,readonly \
+  -e OMNI_ENDPOINT -e OMNI_SERVICE_ACCOUNT_KEY \
+  ghcr.io/termibg22/omni-infra-provider-proxmox:v4.1.1 \
+  --config-file /config.yaml
 ```
 
-### Example Docker Compose
+`v4.1.1` includes the reviewed usability and reliability changes described below.
+Do not use `latest` to pin a production deployment.
 
-You can also run the provider using Docker Compose.
-Create a `docker-compose.yaml` file:
+## Create a Machine Class
+
+In Omni, create an **Auto Provision** Machine Class and select the Proxmox provider.
+For ordinary DHCP machines, the provider defaults to 2 cores, 4096 MB RAM, a 20 GB SCSI boot disk, and a VirtIO NIC on `vmbr0`.
+Select a storage and bridge that exist on every eligible target node, or constrain placement with a node/group.
+
+The provider data accepts grouped UI fields and legacy flat YAML:
 
 ```yaml
-services:
-  omni-infra-provider-proxmox:
-    image: ghcr.io/termibg22/omni-infra-provider-proxmox:v4.0.0
-    volumes:
-      - ./config.yaml:/config.yaml
-    command: >
-      --config-file /config.yaml
-      --omni-api-endpoint https://<account-name>.omni.siderolabs.io/
-      --omni-service-account-key <infrastructure-provider-key>
-    restart: unless-stopped
-```
+compute:
+  cores: 4
+  memory: 8192
 
-Start the provider:
+disks:
+  - storage: local-lvm
+    size: 40
 
-```bash
-docker compose up -d
-```
-
-## Creating a Machine Class for Auto Provision
-
-To enable automatic provisioning of Talos nodes, you need to define a machine class of type `auto-provision` in Omni.
-This class specifies the configuration for new VMs, such as CPU, memory, and disk size.
-
-Example machine class definition:
-
-```yaml
-apiVersion: infrastructure.omni.siderolabs.io/v1alpha1
-kind: MachineClass
-metadata:
-  name: proxmox-auto
-spec:
-  type: auto-provision
-  provider: proxmox
-  config:
-    cpu: 4
-    memory: 8192 # in MB
-    diskSize: 40 # in GB
-    # Add other Proxmox-specific options as needed
-```
-
-Apply the machine class to your Omni account using the Omni UI or CLI.
-
-### Scaling a Cluster with the Machine Class
-
-You can now use above `proxmox-auto` machine class to scale an existing cluster up or down, or to create a new cluster:
-
-- **To scale up:** Increase the desired number of machines in your cluster configuration.
-  Omni will automatically provision new VMs using the specified machine class.
-- **To scale down:** Decrease the desired number of machines.
-  Omni will remove excess VMs accordingly.
-- **To create a new cluster:** Specify the machine class in your cluster manifest when creating a new cluster.
-
-Example cluster manifest snippet:
-
-```yaml
-spec:
-  machineClass: proxmox-auto
-  replicas: 3
-```
-
-### Storage Selector Requirement During VM Sync
-
-> **Note:**
-> During the `vmSync` step, you may encounter an error requiring a Storage Selector.
-> This is a CEL (Common Expression Language) expression used to select the appropriate Proxmox storage for VM disk images.
->
-> To resolve this, add a `storageSelector` field to your machine class configuration.
-
-```yaml
-config:
-  ...
-  storageSelector: 'name == "local-lvm"'
-```
-
-Replace `"local-lvm"` with the name of the storage you want to use for VM disks in your Proxmox cluster.
-
-### Additional Disks
-
-Besides the primary boot disk (`diskSize`, attached as `scsi0`), additional data disks can be attached to each provisioned VM.
-Every additional disk requires its own `storage_selector` CEL expression and occupies `scsi1`, `scsi2`, and subsequent slots in list order.
-
-```yaml
-config:
-  ...
-  additional_disks:
-    - disk_size: 100 # in GB
-      storage_selector: 'name == "local-lvm"'
-      disk_ssd: true
-      disk_discard: true
-    - disk_size: 200
-      storage_selector: 'name == "fast-nvme"'
-      disk_iothread: true
-      disk_cache: writethrough
-      disk_aio: io_uring
-```
-
-Supported per-disk options: `disk_ssd`, `disk_discard`, `disk_iothread`,
-`disk_cache` (`none`, `writethrough`, `writeback`, `directsync`, `unsafe`),
-and `disk_aio` (`native`, `threads`, `io_uring`).
-
-This is particularly useful for storage workloads: for example, Longhorn can
-consume the extra disks via a Talos `UserVolumeConfig` patch that selects
-non-system disks.
-
-### Additional Network Interfaces
-
-Additional NICs can be attached beyond the primary `net0` interface.
-They occupy `net1`, `net2`, and subsequent slots in list order.
-
-```yaml
-config:
-  ...
-  additional_nics:
-    - bridge: vmbr1
-      vlan: 10
-      firewall: false
-    - bridge: vmbr2 # storage network
-```
-
-Supported options: `bridge` (required), `vlan` (optional VLAN tag) and
-`firewall` (enable the per-interface firewall, default `false`).
-
-### PCI Device Passthrough
-
-PCI devices can be attached through Proxmox Resource Mappings.
-Define the mapping under **Datacenter → Resource Mappings → PCI Devices**, then reference its name in the machine class.
-Devices occupy `hostpci0`, `hostpci1`, and subsequent slots in list order.
-
-```yaml
-config:
-  ...
-  machine_type: q35 # recommended for GPU passthrough
-  pci_devices:
-    - mapping: nvidia-gpu-1
-      pcie: true
-      primary_gpu: true
-    - mapping: intel-igpu
-      mdev: i915-GVTg_V5_8
-```
-
-Supported options: `mapping` (required), `mdev` (mediated device name),
-`pcie` (use PCIe instead of PCI), `primary_gpu` (`x-vga=1`) and `rombar`
-(set `false` to disable the ROM BAR).
-
-### USB Device Passthrough
-
-USB devices can be attached through Proxmox Resource Mappings.
-Define the mapping under **Datacenter → Resource Mappings → USB Devices**, then reference its name in the machine class:
-
-```yaml
-config:
-  ...
-  usb_devices:
-    - mapping: rtl-sdr
-      usb3: true
-    - mapping: zigbee-controller
-```
-
-Devices are assigned to `usb0`, `usb1`, and subsequent slots in list order.
-When a machine can run on multiple Proxmox nodes, define each mapping on every
-eligible node.
-
-### High Availability
-
-Adding an `ha:` block to the machine class registers each provisioned VM as a Proxmox HA resource
-and maintains node-affinity / resource-affinity rules per machine request set
-(requires Proxmox VE 9+):
-
-```yaml
-config:
-  ...
-  ha:
-    state: started
-    resource_affinity: negative # spread the set's VMs across nodes
-    node_affinity_nodes:
-      - pve1
-      - pve2
-```
-
-When `ha:` is set, node placement is delegated to Proxmox HA and the provider's
-client-side spread is disabled.
-For dynamic rebalancing, enable the cluster resource scheduler in `datacenter.cfg`
-(`crs: ha=dynamic`, Proxmox VE 9.2+).
-See the [Proxmox HA manager documentation](https://pve.proxmox.com/pve-docs/chapter-ha-manager.html).
-
-### Enterprise Features: Smart Workload Profiles, Unified Disks/NICs, LACP Bonding & Live MachineSet Reconciliation
-
-This provider discovers your Proxmox cluster topology in real time (and refreshes the Omni UI schema periodically via `--schema-refresh-interval`) and reconciles updates on existing `MachineSet`s (`--machineset-sync-interval`).
-
-```yaml
-config:
-  workload_profile: storage-node # standard | control-plane | storage-node | gpu-ai-worker | hardened-secure
-  node_group: rack-a
-  cores: 8
-  memory: 16384
-  min_vmid: 5000
-  max_vmid: 5999
-  talos_extensions:
-    - siderolabs/iscsi-tools
-    - siderolabs/util-linux-tools
-  disks:
-    - size: 40
-      storage: local-lvm
-      ssd: true
-      discard: true
-      iothread: true
-    - size: 500
-      storage: nvme-pool
-      volume_name: ceph-data # Auto-generates Talos UserVolumeConfig mounted at /var/mnt/ceph-data
-      iops_read: 10000
-      iops_write: 5000
-      mbps_read: 1000
-      mbps_write: 500
+network:
   nics:
     - bridge: vmbr0
       vlan: 100
-      mtu: 9000
-      ip_pool: "10.10.100.50-10.10.100.99/24"
-      gateway4: "10.10.100.1"
-    - bridge: vmbr1
-      mtu: 9000
-  bonds:
-    - name: bond0
-      interfaces: ["net0", "net1"]
-      mode: 802.3ad
-      mtu: 9000
-      addresses: ["10.10.200.50/24"]
-  security_groups:
-    - k8s-nodes
-  replication:
-    enabled: true
-    schedule: "*/15"
 ```
 
-### Using Executable
+The first disk is the boot disk.
+Later entries are data disks, assigned consecutive slots on their chosen bus (`scsi`, `virtio`, or `sata`).
+Legacy fields such as `cores`, `memory`, `disk_size`, `storage_selector`, `network_bridge`, `additional_disks`, and `additional_nics` remain supported.
+Field names use snake_case: `cores`, `disk_size`, and `storage_selector`, rather than `cpu`, `diskSize`, or `storageSelector`.
 
-Build the project (should have docker and buildx installed):
+For CLI usage, a Machine Class is an Omni resource:
 
-```bash
-make omni-infra-provider-linux-amd64
+```yaml
+metadata:
+  namespace: default
+  type: MachineClasses.omni.sidero.dev
+  id: proxmox-small
+spec:
+  auto_provision:
+    provider_id: proxmox
+    provider_data: |
+      cores: 4
+      memory: 8192
+      disks:
+        - storage: local-lvm
+          size: 40
 ```
 
-Run the executable:
+Apply it with `omnictl apply -f machine-class.yaml`, then select the class when configuring a cluster's machine sets.
 
-```bash
-_out/omni-infra-provider-linux-amd64 --config config.yaml --omni-api-endpoint https://<account-name>.omni.siderolabs.io/ --omni-service-account-key <service-account-key>
+## Form detail and updates (v4.1.1)
+
+The default form shows four sections: General, CPU & Memory, Disks, and Network.
+Use `--schema-mode advanced` to expose firmware, cloning, HA, replication, firewall, bonding, passthrough, QoS, DNS, and static IP configuration.
+Switching form modes preserves advanced fields already present in provider data.
+The mode is a provider startup setting, shared by users of that provider.
+Omni controls the form renderer; this repository cannot add client-side tabs or conditional dropdowns to it.
+
+| Flag | Default | Purpose |
+| --- | --- | --- |
+| `--schema-mode` | `basic` | `basic` or `advanced` form |
+| `--schema-refresh-interval` | `2m` | Refresh discovered dropdown choices; `0` disables |
+| `--machineset-sync-interval` | `0` | Opt in to existing-VM updates, for example `30s` |
+| `--id` | `proxmox` | Infrastructure provider ID |
+| `--config-file` | required | Proxmox connection settings |
+
+Existing-VM reconciliation reads **MachineRequest provider data**.
+Editing a Machine Class is not a guarantee that Omni will change already-created MachineRequests.
+When explicitly enabled, the reconciler can apply supported host configuration changes and grow disks; CPU/memory changes can remain pending until a VM reboot.
+It never shrinks disks.
+Guest networking, installation media/extensions, firmware, and Talos volume changes require reprovisioning and are rejected when an applied configuration snapshot is available.
+The first observation of a legacy VM records a baseline without changing its hardware.
+Review any requested secondary-disk removal: reconciliation detaches removed data disks.
+
+## Advanced examples
+
+The following snippets are **provider data**, not complete Machine Class manifests.
+
+### Data disks and QoS
+
+```yaml
+workload_profile: storage-node
+disks:
+  - storage: local-lvm
+    size: 40
+  - storage: nvme-pool
+    size: 500
+    volume_name: ceph-data
+    iops_read: 10000
+    mbps_write: 500
+    backup: false
+    replicate: false
 ```
 
-## Running Integration Tests
+A data disk's `volume_name` creates a Talos `UserVolumeConfig` mounted at `/var/mnt/<name>`, matching that disk's serial.
+Names use lowercase letters, digits and hyphens; names producing the same serial are rejected.
+Workload profiles supply defaults and extra Talos extensions; explicit YAML values, including `false`, take precedence.
+Profiles are `standard`, `control-plane`, `storage-node`, `gpu-ai-worker`, and `hardened-secure`.
+The control-plane profile enables Proxmox HA unless explicitly disabled with `ha: {state: none}`.
 
-End-to-end tests spin up two Proxmox VE nodes in privileged Docker containers
-(via [containerized-proxmox](https://github.com/LongQT-sea/containerized-proxmox)),
-form a `pvecm` cluster between them, launch Omni and the provider, then drive the
-`omni-integration-test` suite against the provider.
+### Static addresses, pools and bonds
 
-Requirements on the host running the tests:
-
-- Linux kernel 6.8+ with `/dev/kvm` (Intel VT-x or AMD-V enabled)
-- Docker 26+ with privileged containers permitted
-- `IMAGE_FACTORY_ENTERPRISE_STAGING_TOKEN` set in the environment, an API token for the staging enterprise image factory (CI reads it from the sops-encrypted `.secrets.yaml`). `IMAGE_FACTORY_ENTERPRISE_ENV=prod` selects the production factory and its token `IMAGE_FACTORY_ENTERPRISE_PROD_TOKEN` instead.
-
-Run it via:
-
-```bash
-sudo -E make run-integration-test
+```yaml
+nics:
+  - bridge: vmbr0
+    ip_pool: 10.10.100.50-10.10.100.99/24
+    gateway4: 10.10.100.1
+    mtu: 9000
 ```
 
-The Proxmox containers, Vault, and Omni are torn down on exit (in CI they are
-left in place so the artifact upload steps can collect logs from
-`/tmp/proxmox-e2e/`).
+Use a dedicated range excluding gateways, DHCP ranges, and manually assigned IPs.
+Pool reservations are persisted in Omni before the VM starts and restored after a provider restart.
+Overlapping pools share reservations within a provider process; separate provider IDs and external IPAM systems do not coordinate leases.
+Subnet notation is also accepted, with a bounded candidate window; explicit ranges make the intended allocation limits clearer.
+
+```yaml
+nics:
+  - bridge: vmbr1
+  - bridge: vmbr2
+bonds:
+  - name: bond0
+    interfaces: [net0, net1]
+    mode: 802.3ad
+    mtu: 9000
+    addresses: [10.10.200.50/24]
+    gateway4: 10.10.200.1
+```
+
+Configure addresses/routes on the bond, rather than its member NICs.
+LACP requires compatible host/switch networking and Talos support for the supplied NoCloud configuration.
+
+### HA, replication and hardware mappings
+
+```yaml
+ha:
+  state: started
+  resource_affinity: negative
+  node_affinity_nodes: [pve1, pve2]
+replication:
+  enabled: true
+  target_node: pve2
+  schedule: '*/15'
+pci_devices:
+  - mapping: gpu-1
+    pcie: true
+    rombar: false
+usb_devices:
+  - mapping: zigbee-controller
+    usb3: true
+```
+
+HA affinity rules require Proxmox VE 9+.
+Storage replication requires suitable ZFS storage and another eligible node.
+PCI/USB mappings must exist on every eligible node; provisioning fails if no candidate provides all requested mappings.
+Use `bios: ovmf` when requesting `secure_boot: true`.
+
+### Clone a template
+
+```yaml
+provisioning_mode: clone
+template_vmid: '9000'
+full_clone: true
+disks:
+  - storage: local-lvm
+    size: 40
+```
+
+The template must already contain the intended Talos version, firmware, and extensions, and must support NoCloud configuration.
+The configured boot bus must match the template.
+Disk resizing grows the boot disk when needed; retries preserve existing disk volumes.
+
+## Build and verify
+
+Install the Go version required by `go.mod`, then run:
+
+```sh
+go test ./...
+go test -race ./...
+go vet ./...
+go build -o ./_out/omni-infra-provider-proxmox ./cmd/omni-infra-provider-proxmox
+```
+
+Run a source build with the same environment variables and `--config-file config.yaml`.
+Cross-compile using `GOOS=linux GOARCH=amd64 CGO_ENABLED=0` or `GOARCH=arm64`.
+The fork's container workflow now runs verification before publishing; main builds use `edge` and stable release tags can update `latest`.
+
+The full integration suite requires Linux 6.8+, `/dev/kvm`, privileged Docker 26+, and a staging image-factory token in `IMAGE_FACTORY_ENTERPRISE_STAGING_TOKEN`.
+Run `sudo -E make run-integration-test` on a disposable test host.
+See `hack/test/integration.sh` for the production-factory alternative and teardown behavior.
