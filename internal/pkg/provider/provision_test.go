@@ -597,9 +597,10 @@ func TestBuildDynamicSchemaInjectsClusterOptions(t *testing.T) {
 	require.Contains(t, dynamic, `"zigbee-dongle"`)
 	require.Contains(t, dynamic, `"spread-workers"`)
 	require.Contains(t, dynamic, `"custom-epyc"`)
-	// Must use non-empty sentinel values ("auto"/"none") instead of "" for Reka UI compatibility
-	require.Contains(t, dynamic, `"auto"`)
-	require.Contains(t, dynamic, `"none"`)
+	// The display title is nonempty for Reka, but the saved clearing value is empty.
+	require.Contains(t, dynamic, `"const": ""`)
+	require.Contains(t, dynamic, `"title": " "`)
+	require.NotContains(t, dynamic, `"auto"`)
 }
 
 func TestIPPoolAllocator(t *testing.T) {

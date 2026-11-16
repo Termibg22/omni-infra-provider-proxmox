@@ -156,30 +156,52 @@ func TestEditorSchemaKeepsAllLegacyAndAdvancedFields(t *testing.T) {
 
 		for _, key := range []string{
 			"cores", "memory", "disk_size", "storage_selector", "network_bridge", "bios", "cpu_flags",
-			"talos_extensions", "ha", "replication", "firewall_options", "pci_devices", "usb_devices", "bonds",
+			"talos_extensions", "ha", "replication", "firewall_options", "pci_devices", "usb_devices", "_section_boot_disk", "_section_primary_nic",
 		} {
 			require.Contains(t, properties, key)
 		}
 
 		var storage struct {
-			Enum []string `json:"enum"`
+			OneOf []struct {
+				Const string `json:"const"`
+				Title string `json:"title"`
+			} `json:"oneOf"`
 		}
 		require.NoError(t, json.Unmarshal(properties["storage"], &storage))
-		require.Equal(t, []string{"auto", "vm-zfs"}, storage.Enum)
+		require.Len(t, storage.OneOf, 2)
+		require.Empty(t, storage.OneOf[0].Const)
+		require.Equal(t, " ", storage.OneOf[0].Title)
+		require.Equal(t, "vm-zfs", storage.OneOf[1].Const)
+		require.NotContains(t, properties, "workload_profile")
+		require.NotContains(t, properties, "bonds")
+		require.NotContains(t, built, "legacy format")
 		require.NotContains(t, root, "x-omni-uischema")
-
-		var profile struct {
-			Description string   `json:"description"`
-			Enum        []string `json:"enum"`
-		}
-		require.NoError(t, json.Unmarshal(properties["workload_profile"], &profile))
-		require.Len(t, profile.Enum, 5)
-
-		for _, item := range profile.Enum {
-			require.Contains(t, profile.Description, map[string]string{
-				"standard": "Standard", "control-plane": "Control plane", "storage-node": "Storage",
-				"gpu-ai-worker": "GPU / AI", "hardened-secure": "Secure",
-			}[item])
-		}
 	}
+}
+
+func TestClearedSelectorsUseDefaultsAndSkipEmptyHAEntries(t *testing.T) {
+	var data Data
+	require.NoError(t, yaml.Unmarshal([]byte(`
+node: ""
+node_group: ""
+pool: ""
+storage: ""
+network_bridge: ""
+disk_cache: none
+security_groups: ["", web]
+ha:
+  group: ""
+  rules: ["", spread-workers]
+  node_affinity_nodes: ["", pve1]
+`), &data))
+	data.Normalize()
+	require.Empty(t, data.Node)
+	require.Empty(t, data.NodeGroup)
+	require.Empty(t, data.Pool)
+	require.Empty(t, data.EffectiveDisks()[0].Storage)
+	require.Equal(t, "none", data.EffectiveDisks()[0].Cache)
+	require.Equal(t, "vmbr0", data.EffectiveNICs()[0].Bridge)
+	require.Equal(t, []string{"web"}, data.SecurityGroups)
+	require.Equal(t, []string{"spread-workers"}, data.HA.Rules)
+	require.Equal(t, []string{"pve1"}, data.HA.NodeAffinityNodes)
 }

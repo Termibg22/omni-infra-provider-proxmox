@@ -2,43 +2,48 @@
   "type": "object",
   "title": "Proxmox VM Configuration",
   "properties": {
-    "workload_profile": {
-      "type": "string",
-      "title": "Workload Profile (defaults only)",
-      "default": "standard",
-      "description": "Profiles supply defaults only for omitted settings; explicit settings take precedence. They do not change CPU or RAM sizes.\n\nStandard — normal Talos VM: No profile-specific changes. Defaults: 2 cores, 1 socket, 4096 MiB RAM, 20 GiB boot disk, VirtIO network. qemu-guest-agent is always installed.\n\nControl plane — HA, protection and watchdog: Defaults to startup order=1,up=30; i6300esb watchdog with reset; VM deletion protection; hardware RNG; Proxmox HA started with negative resource affinity. Requires PVE 9+ affinity support. Explicit ha.state=none disables HA.\n\nStorage — SCSI, TRIM, IO threads and storage extensions: Defaults to virtio-scsi-single, cache=none, aio=io_uring, SSD emulation, discard/TRIM and IO threads. Adds siderolabs/iscsi-tools and siderolabs/util-linux-tools to Talos.\n\nGPU / AI — host CPU, UEFI, NUMA and NVIDIA extensions: Defaults to q35, host CPU, OVMF/UEFI, NUMA and ballooning disabled. Adds NVIDIA production kernel module and container-toolkit extensions. A PCI mapping must still be selected explicitly.\n\nSecure — UEFI Secure Boot, TPM and protection: Defaults to OVMF/UEFI, Secure Boot, TPM 2.0, VM deletion protection and hardware RNG. Requires compatible signed Talos installation media.\n\nThe standard profile is used when this field is blank. Help is available through this question-mark tooltip; Omni does not display a separate profile summary.",
-      "enum": [
-        "standard",
-        "control-plane",
-        "storage-node",
-        "gpu-ai-worker",
-        "hardened-secure"
-      ]
-    },
     "node_group": {
       "type": "string",
-      "title": "Node Group (blank = auto)",
-      "default": "auto",
-      "description": "Logical node group (auto-discovered from HA Groups, HA Rules, SDN Zones, PCI Groups, or config.yaml). Use 'auto' for all cluster nodes. Leaving this field blank has the same effect as auto. Omni does not preselect JSON Schema defaults."
+      "title": "Node Group",
+      "default": "",
+      "description": "Limit placement to a group of Proxmox nodes. Leave empty to use all current nodes. Select the empty first row to clear this selection.",
+      "oneOf": [
+        {
+          "const": "",
+          "title": " "
+        }
+      ]
     },
     "node": {
       "type": "string",
-      "title": "Target Node (blank = auto)",
-      "default": "auto",
-      "description": "Specific Proxmox node, or 'auto' to use the placement strategy. Leaving this field blank has the same effect as auto. Omni does not preselect JSON Schema defaults."
+      "title": "Target Node",
+      "default": "",
+      "description": "Pin this VM to a Proxmox node. Leave empty to use the placement strategy. Select the empty first row to clear this selection.",
+      "oneOf": [
+        {
+          "const": "",
+          "title": " "
+        }
+      ]
     },
     "pool": {
       "type": "string",
-      "title": "Resource Pool (blank = auto)",
-      "default": "auto",
-      "description": "Proxmox resource pool, or 'auto' to use the Omni MachineRequestSet ID. Leaving this field blank has the same effect as auto. Omni does not preselect JSON Schema defaults."
+      "title": "Resource Pool",
+      "default": "",
+      "description": "Proxmox resource pool. Leave empty to use the Omni MachineRequestSet ID. Select the empty first row to clear this selection.",
+      "oneOf": [
+        {
+          "const": "",
+          "title": " "
+        }
+      ]
     },
     "cores": {
       "type": [
         "integer",
         "null"
       ],
-      "title": "Cores (0 = default: 2)",
+      "title": "Cores (default: 2)",
       "default": 2,
       "description": "CPU cores per socket. Omitted, blank or 0 uses 2. Existing saved values are shown directly.",
       "allOf": [
@@ -59,7 +64,7 @@
         "integer",
         "null"
       ],
-      "title": "Memory (MiB, 0 = default: 4096)",
+      "title": "Memory (MiB, default: 4096)",
       "default": 4096,
       "description": "RAM in MiB. Omitted, blank or 0 uses 4096. Existing saved values are shown directly.",
       "allOf": [
@@ -75,13 +80,19 @@
         }
       ]
     },
+    "_section_boot_disk": {
+      "type": "object",
+      "title": "Boot Disk",
+      "readOnly": true,
+      "properties": {}
+    },
     "disk_size": {
       "type": [
         "integer",
         "null"
       ],
-      "description": "Primary boot disk size in GiB. Omitted, blank or 0 uses 20. This boot disk remains active when the complete disk list is empty.",
-      "title": "Boot Disk Size (GiB, 0 = default: 20)",
+      "description": "Primary boot disk size in GiB. Empty or 0 uses 20. The All Disks list, when populated, replaces this boot disk.",
+      "title": "Size (GiB, default: 20)",
       "default": 20,
       "allOf": [
         {
@@ -98,56 +109,107 @@
     },
     "storage": {
       "type": "string",
-      "title": "Boot Disk Storage (blank = auto)",
-      "default": "auto"
+      "title": "Storage",
+      "default": "",
+      "description": "Destination for the boot disk. Leave empty to use the storage selector below, or choose an available VM disk storage automatically. Select the empty first row to clear this selection.",
+      "oneOf": [
+        {
+          "const": "",
+          "title": " "
+        }
+      ]
     },
     "storage_selector": {
       "type": "string",
-      "description": "Optional CEL selector used when Boot Disk Storage is blank or auto. Existing selectors are preserved, for example name == \"local-zfs\". A named Boot Disk Storage takes precedence.",
-      "title": "Boot Disk Storage Selector (optional CEL override)"
+      "description": "Optional CEL expression or storage name used when Storage is empty. For example: name == \"local-zfs\".",
+      "title": "Storage Selector (CEL)"
     },
     "disk_ssd": {
       "type": "boolean",
       "description": "Enable SSD emulation (ssd=1) for better performance on SSD/NVMe storage",
-      "title": "Boot Disk: SSD Emulation"
+      "title": "SSD Emulation"
     },
     "disk_discard": {
       "type": "boolean",
       "description": "Enable TRIM/discard support for thin-provisioned storage",
-      "title": "Boot Disk: Discard (TRIM)"
+      "title": "Discard (TRIM)"
     },
     "disk_iothread": {
       "type": "boolean",
       "description": "Enable dedicated IO thread for better disk performance",
-      "title": "Boot Disk: IO Thread"
+      "title": "IO Thread"
     },
     "disk_cache": {
       "type": "string",
-      "enum": [
-        "none",
-        "writethrough",
-        "writeback",
-        "directsync",
-        "unsafe"
-      ],
-      "description": "Disk cache mode. Use 'none' for best performance with battery-backed storage",
-      "title": "Boot Disk: Cache"
+      "description": "Disk cache mode. Leave empty to use Proxmox's default. Select the empty first row to clear this selection.",
+      "title": "Cache",
+      "oneOf": [
+        {
+          "const": "",
+          "title": " "
+        },
+        {
+          "const": "none",
+          "title": "none"
+        },
+        {
+          "const": "writethrough",
+          "title": "writethrough"
+        },
+        {
+          "const": "writeback",
+          "title": "writeback"
+        },
+        {
+          "const": "directsync",
+          "title": "directsync"
+        },
+        {
+          "const": "unsafe",
+          "title": "unsafe"
+        }
+      ]
     },
     "disk_aio": {
       "type": "string",
-      "enum": [
-        "native",
-        "threads",
-        "io_uring"
-      ],
-      "description": "Async IO mode. Use 'io_uring' for best performance on modern kernels",
-      "title": "Boot Disk: Async IO"
+      "description": "Async IO mode. Leave empty to use Proxmox's default. Select the empty first row to clear this selection.",
+      "title": "Async IO",
+      "oneOf": [
+        {
+          "const": "",
+          "title": " "
+        },
+        {
+          "const": "native",
+          "title": "native"
+        },
+        {
+          "const": "threads",
+          "title": "threads"
+        },
+        {
+          "const": "io_uring",
+          "title": "io_uring"
+        }
+      ]
+    },
+    "_section_primary_nic": {
+      "type": "object",
+      "title": "Primary NIC",
+      "readOnly": true,
+      "properties": {}
     },
     "network_bridge": {
       "type": "string",
-      "description": "Network bridge to attach to the VM, ex. vmbr0",
-      "title": "Primary Network Bridge (blank = vmbr0)",
-      "default": "vmbr0"
+      "description": "Bridge for the primary VirtIO NIC. Leave empty to use vmbr0. Select the empty first row to clear this selection.",
+      "title": "Bridge",
+      "default": "",
+      "oneOf": [
+        {
+          "const": "",
+          "title": " "
+        }
+      ]
     },
     "vlan": {
       "type": [
@@ -155,7 +217,7 @@
         "null"
       ],
       "description": "VLAN tag for primary NIC, set to 0 for none",
-      "title": "Primary NIC: VLAN Tag",
+      "title": "VLAN Tag",
       "allOf": [
         {
           "minimum": 0
@@ -165,11 +227,17 @@
     "network_firewall": {
       "type": "boolean",
       "description": "Enable per-VM firewall (fwbr) on primary NIC. Defaults to true. Set false when L2-broadcast services need traffic to bypass fwbr.",
-      "title": "Primary NIC: Firewall"
+      "title": "Firewall"
+    },
+    "_section_extra_devices": {
+      "type": "object",
+      "title": "Additional Devices and Overrides",
+      "readOnly": true,
+      "properties": {}
     },
     "additional_disks": {
       "type": "array",
-      "description": "Additional disks to attach to the VM (scsi1, scsi2, etc.)",
+      "description": "Extra data disks appended after the boot disk. Leave empty for a single disk.",
       "items": {
         "type": "object",
         "properties": {
@@ -194,7 +262,7 @@
           },
           "storage_selector": {
             "type": "string",
-            "description": "CEL expression for selecting VM disk image storage for this disk"
+            "description": "Optional CEL expression. Used when Storage is empty; if both are empty, inherit the boot disk storage selection."
           },
           "disk_ssd": {
             "type": "boolean",
@@ -210,41 +278,78 @@
           },
           "disk_cache": {
             "type": "string",
-            "enum": [
-              "none",
-              "writethrough",
-              "writeback",
-              "directsync",
-              "unsafe"
-            ],
-            "description": "Disk cache mode for this disk"
+            "description": "Disk cache mode for this disk. Select the empty first row to clear this selection.",
+            "oneOf": [
+              {
+                "const": "",
+                "title": " "
+              },
+              {
+                "const": "none",
+                "title": "none"
+              },
+              {
+                "const": "writethrough",
+                "title": "writethrough"
+              },
+              {
+                "const": "writeback",
+                "title": "writeback"
+              },
+              {
+                "const": "directsync",
+                "title": "directsync"
+              },
+              {
+                "const": "unsafe",
+                "title": "unsafe"
+              }
+            ]
           },
           "disk_aio": {
             "type": "string",
-            "enum": [
-              "native",
-              "threads",
-              "io_uring"
-            ],
-            "description": "Async IO mode for this disk"
+            "description": "Async IO mode for this disk. Select the empty first row to clear this selection.",
+            "oneOf": [
+              {
+                "const": "",
+                "title": " "
+              },
+              {
+                "const": "native",
+                "title": "native"
+              },
+              {
+                "const": "threads",
+                "title": "threads"
+              },
+              {
+                "const": "io_uring",
+                "title": "io_uring"
+              }
+            ]
           },
           "storage": {
             "type": "string",
             "title": "Storage",
-            "default": "auto",
-            "description": "VM-disk-capable Proxmox storage pool ('auto' picks the first available)."
+            "default": "",
+            "description": "VM-disk-capable Proxmox storage pool (empty selects an available VM disk storage). Select the empty first row to clear this selection.",
+            "oneOf": [
+              {
+                "const": "",
+                "title": " "
+              }
+            ]
           }
         },
         "required": [
-          "disk_size",
-          "storage_selector"
+          "disk_size"
         ]
       },
-      "title": "Additional Data Disks (legacy format)"
+      "title": "Additional Disks"
     },
     "additional_nics": {
       "type": "array",
-      "description": "Additional network interfaces (e.g., for storage networks)",
+      "description": "Extra network adapters appended after the primary NIC. Leave empty for one adapter.",
       "items": {
         "type": "object",
         "properties": {
@@ -289,13 +394,33 @@
             "type": "string",
             "title": "Model",
             "default": "virtio",
-            "enum": [
-              "virtio",
-              "e1000",
-              "e1000e",
-              "vmxnet3",
-              "rtl8139"
-            ]
+            "oneOf": [
+              {
+                "const": "",
+                "title": " "
+              },
+              {
+                "const": "virtio",
+                "title": "virtio"
+              },
+              {
+                "const": "e1000",
+                "title": "e1000"
+              },
+              {
+                "const": "e1000e",
+                "title": "e1000e"
+              },
+              {
+                "const": "vmxnet3",
+                "title": "vmxnet3"
+              },
+              {
+                "const": "rtl8139",
+                "title": "rtl8139"
+              }
+            ],
+            "description": "Select the empty first row to clear this selection."
           },
           "mtu": {
             "type": [
@@ -354,12 +479,12 @@
           "bridge"
         ]
       },
-      "title": "Additional Network Interfaces (legacy format)"
+      "title": "Additional NICs"
     },
     "disks": {
       "type": "array",
-      "title": "Advanced: Complete Disk List (optional boot + data override)",
-      "description": "Optional replacement for the boot disk fields above. Leave empty to keep the boot disk (default 20 GiB). If you add entries, the FIRST entry replaces the boot disk, then the rest are data disks. Legacy additional_disks are still appended.",
+      "title": "All Disks (override boot disk)",
+      "description": "Optional complete disk configuration for per-disk bus, QoS and Talos volume settings. The FIRST entry replaces the boot disk above. Extra entries are data disks. Additional Disks are appended afterwards.",
       "items": {
         "type": "object",
         "title": "Hard Disk",
@@ -367,8 +492,14 @@
           "storage": {
             "type": "string",
             "title": "Storage",
-            "default": "auto",
-            "description": "VM-disk-capable Proxmox storage pool ('auto' picks the first available)."
+            "default": "",
+            "description": "VM-disk-capable Proxmox storage pool (empty selects an available VM disk storage). Select the empty first row to clear this selection.",
+            "oneOf": [
+              {
+                "const": "",
+                "title": " "
+              }
+            ]
           },
           "size": {
             "type": [
@@ -395,36 +526,81 @@
             "type": "string",
             "title": "Bus / Device",
             "default": "scsi",
-            "enum": [
-              "scsi",
-              "virtio",
-              "sata"
-            ],
-            "description": "Disk controller bus"
+            "description": "Disk controller bus. Select the empty first row to clear this selection.",
+            "oneOf": [
+              {
+                "const": "",
+                "title": " "
+              },
+              {
+                "const": "scsi",
+                "title": "scsi"
+              },
+              {
+                "const": "virtio",
+                "title": "virtio"
+              },
+              {
+                "const": "sata",
+                "title": "sata"
+              }
+            ]
           },
           "cache": {
             "type": "string",
             "title": "Cache",
             "default": "none",
-            "enum": [
-              "none",
-              "writethrough",
-              "writeback",
-              "directsync",
-              "unsafe"
-            ],
-            "description": "Disk cache mode"
+            "description": "Disk cache mode. Select the empty first row to clear this selection.",
+            "oneOf": [
+              {
+                "const": "",
+                "title": " "
+              },
+              {
+                "const": "none",
+                "title": "none"
+              },
+              {
+                "const": "writethrough",
+                "title": "writethrough"
+              },
+              {
+                "const": "writeback",
+                "title": "writeback"
+              },
+              {
+                "const": "directsync",
+                "title": "directsync"
+              },
+              {
+                "const": "unsafe",
+                "title": "unsafe"
+              }
+            ]
           },
           "aio": {
             "type": "string",
             "title": "Async IO",
             "default": "io_uring",
-            "enum": [
-              "io_uring",
-              "native",
-              "threads"
-            ],
-            "description": "Async IO mode"
+            "description": "Async IO mode. Select the empty first row to clear this selection.",
+            "oneOf": [
+              {
+                "const": "",
+                "title": " "
+              },
+              {
+                "const": "io_uring",
+                "title": "io_uring"
+              },
+              {
+                "const": "native",
+                "title": "native"
+              },
+              {
+                "const": "threads",
+                "title": "threads"
+              }
+            ]
           },
           "ssd": {
             "type": "boolean",
@@ -512,7 +688,7 @@
           "storage_selector": {
             "type": "string",
             "title": "Storage Selector (CEL)",
-            "description": "Preserves an existing CEL storage selection. Used only when Storage is auto."
+            "description": "Preserves an existing CEL storage selection. Used only when Storage is empty."
           }
         },
         "required": [
@@ -522,8 +698,8 @@
     },
     "nics": {
       "type": "array",
-      "title": "Advanced: Complete NIC List (optional primary + secondary override)",
-      "description": "Optional replacement for the primary network fields above. Leave empty to keep one VirtIO NIC on the primary bridge (default vmbr0). If you add entries, the FIRST entry replaces the primary NIC. Legacy additional_nics are still appended.",
+      "title": "All NICs (override primary NIC)",
+      "description": "Optional complete NIC configuration for addresses, routing, MTU and queues. The FIRST entry replaces the primary NIC above. Additional NICs are appended afterwards.",
       "items": {
         "type": "object",
         "title": "Network Device",
@@ -538,13 +714,33 @@
             "type": "string",
             "title": "Model",
             "default": "virtio",
-            "enum": [
-              "virtio",
-              "e1000",
-              "e1000e",
-              "vmxnet3",
-              "rtl8139"
-            ]
+            "oneOf": [
+              {
+                "const": "",
+                "title": " "
+              },
+              {
+                "const": "virtio",
+                "title": "virtio"
+              },
+              {
+                "const": "e1000",
+                "title": "e1000"
+              },
+              {
+                "const": "e1000e",
+                "title": "e1000e"
+              },
+              {
+                "const": "vmxnet3",
+                "title": "vmxnet3"
+              },
+              {
+                "const": "rtl8139",
+                "title": "rtl8139"
+              }
+            ],
+            "description": "Select the empty first row to clear this selection."
           },
           "vlan": {
             "type": [
@@ -714,17 +910,181 @@
         ]
       }
     },
+    "_section_compute": {
+      "type": "object",
+      "title": "Advanced CPU and Memory",
+      "readOnly": true,
+      "properties": {}
+    },
+    "sockets": {
+      "type": [
+        "integer",
+        "null"
+      ],
+      "title": "Sockets",
+      "default": 1,
+      "description": "Number of CPU sockets",
+      "allOf": [
+        {
+          "anyOf": [
+            {
+              "const": 0
+            },
+            {
+              "minimum": 1
+            }
+          ]
+        }
+      ]
+    },
+    "cpu_type": {
+      "type": "string",
+      "title": "CPU Type",
+      "default": "x86-64-v2-AES",
+      "description": "QEMU CPU model ('host' for max performance/GPU, 'x86-64-v2-AES' for live migration). Select the empty first row to clear this selection.",
+      "oneOf": [
+        {
+          "const": "",
+          "title": " "
+        },
+        {
+          "const": "x86-64-v2-AES",
+          "title": "x86-64-v2-AES"
+        },
+        {
+          "const": "x86-64-v3",
+          "title": "x86-64-v3"
+        },
+        {
+          "const": "x86-64-v4",
+          "title": "x86-64-v4"
+        },
+        {
+          "const": "host",
+          "title": "host"
+        },
+        {
+          "const": "max",
+          "title": "max"
+        },
+        {
+          "const": "kvm64",
+          "title": "kvm64"
+        },
+        {
+          "const": "qemu64",
+          "title": "qemu64"
+        }
+      ]
+    },
+    "balloon": {
+      "type": "boolean",
+      "title": "Ballooning Device",
+      "default": true,
+      "description": "Enable memory ballooning (disable for GPU passthrough or hugepages)."
+    },
+    "numa": {
+      "type": "boolean",
+      "title": "Enable NUMA",
+      "default": false,
+      "description": "Enable NUMA topology."
+    },
+    "hugepages": {
+      "type": "string",
+      "title": "Hugepages",
+      "default": "",
+      "description": "Hugepage size. Leave empty to use normal memory pages. Select the empty first row to clear this selection.",
+      "oneOf": [
+        {
+          "const": "",
+          "title": " "
+        },
+        {
+          "const": "any",
+          "title": "any"
+        },
+        {
+          "const": "2MB",
+          "title": "2MB"
+        },
+        {
+          "const": "1GB",
+          "title": "1GB"
+        }
+      ]
+    },
+    "cpu_flags": {
+      "type": "string",
+      "title": "CPU Flags",
+      "description": "Optional semicolon-separated CPU flags (e.g. '+aes;+avx2;+pdpe1gb')."
+    },
+    "cpu_limit": {
+      "type": [
+        "number",
+        "null"
+      ],
+      "title": "CPU Limit",
+      "description": "Optional max CPU cores limit (null or 0 for unlimited).",
+      "allOf": [
+        {
+          "minimum": 0
+        }
+      ]
+    },
+    "cpu_units": {
+      "type": [
+        "integer",
+        "null"
+      ],
+      "title": "CPU Units",
+      "description": "Optional relative CPU scheduler weight.",
+      "allOf": [
+        {
+          "anyOf": [
+            {
+              "const": 0
+            },
+            {
+              "minimum": 1,
+              "maximum": 262144
+            }
+          ]
+        }
+      ]
+    },
+    "_section_placement": {
+      "type": "object",
+      "title": "Placement and Metadata",
+      "readOnly": true,
+      "properties": {}
+    },
     "placement_strategy": {
       "type": "string",
       "title": "Placement Strategy",
       "default": "spread",
-      "enum": [
-        "spread",
-        "fewer-vms",
-        "round-robin",
-        "binpack"
-      ],
-      "description": "Auto-placement strategy when Target Node is 'auto'."
+      "description": "Auto-placement strategy when Target Node is empty. Select the empty first row to clear this selection.",
+      "oneOf": [
+        {
+          "const": "",
+          "title": " "
+        },
+        {
+          "const": "spread",
+          "title": "spread"
+        },
+        {
+          "const": "fewer-vms",
+          "title": "fewer-vms"
+        },
+        {
+          "const": "round-robin",
+          "title": "round-robin"
+        },
+        {
+          "const": "binpack",
+          "title": "binpack"
+        }
+      ]
     },
     "auto_create_pool": {
       "type": "boolean",
@@ -800,312 +1160,55 @@
         }
       ]
     },
-    "sockets": {
-      "type": [
-        "integer",
-        "null"
-      ],
-      "title": "Sockets",
-      "default": 1,
-      "description": "Number of CPU sockets",
-      "allOf": [
-        {
-          "anyOf": [
-            {
-              "const": 0
-            },
-            {
-              "minimum": 1
-            }
-          ]
-        }
-      ]
-    },
-    "cpu_type": {
-      "type": "string",
-      "title": "CPU Type",
-      "default": "x86-64-v2-AES",
-      "enum": [
-        "x86-64-v2-AES",
-        "x86-64-v3",
-        "x86-64-v4",
-        "host",
-        "max",
-        "kvm64",
-        "qemu64"
-      ],
-      "description": "QEMU CPU model ('host' for max performance/GPU, 'x86-64-v2-AES' for live migration)."
-    },
-    "balloon": {
-      "type": "boolean",
-      "title": "Ballooning Device",
-      "default": true,
-      "description": "Enable memory ballooning (disable for GPU passthrough or hugepages)."
-    },
-    "numa": {
-      "type": "boolean",
-      "title": "Enable NUMA",
-      "default": false,
-      "description": "Enable NUMA topology."
-    },
-    "hugepages": {
-      "type": "string",
-      "title": "Hugepages",
-      "default": "none",
-      "enum": [
-        "none",
-        "any",
-        "2MB",
-        "1GB"
-      ],
-      "description": "Hugepages size ('none' to disable)."
-    },
-    "cpu_flags": {
-      "type": "string",
-      "title": "CPU Flags",
-      "description": "Optional semicolon-separated CPU flags (e.g. '+aes;+avx2;+pdpe1gb')."
-    },
-    "cpu_limit": {
-      "type": [
-        "number",
-        "null"
-      ],
-      "title": "CPU Limit",
-      "description": "Optional max CPU cores limit (null or 0 for unlimited).",
-      "allOf": [
-        {
-          "minimum": 0
-        }
-      ]
-    },
-    "cpu_units": {
-      "type": [
-        "integer",
-        "null"
-      ],
-      "title": "CPU Units",
-      "description": "Optional relative CPU scheduler weight.",
-      "allOf": [
-        {
-          "anyOf": [
-            {
-              "const": 0
-            },
-            {
-              "minimum": 1,
-              "maximum": 262144
-            }
-          ]
-        }
-      ]
-    },
-    "bonds": {
-      "type": "array",
-      "title": "Network Bonds (LACP / Active-Backup)",
-      "items": {
-        "type": "object",
-        "title": "Bond",
-        "properties": {
-          "name": {
-            "type": "string",
-            "title": "Bond Name",
-            "default": "bond0"
-          },
-          "interfaces": {
-            "type": "array",
-            "title": "Member Interfaces",
-            "items": {
-              "type": "string"
-            }
-          },
-          "mode": {
-            "type": "string",
-            "title": "Mode",
-            "default": "802.3ad",
-            "enum": [
-              "802.3ad",
-              "active-backup",
-              "balance-xor",
-              "broadcast",
-              "balance-tlb",
-              "balance-alb"
-            ]
-          },
-          "lacp_rate": {
-            "type": "string",
-            "title": "LACP Rate",
-            "default": "fast",
-            "enum": [
-              "fast",
-              "slow"
-            ]
-          },
-          "transmit_hash_policy": {
-            "type": "string",
-            "title": "Hash Policy",
-            "default": "layer2+3",
-            "enum": [
-              "layer2",
-              "layer2+3",
-              "layer3+4"
-            ]
-          },
-          "mii_monitor_interval": {
-            "type": [
-              "integer",
-              "null"
-            ],
-            "title": "MII Monitor (ms)",
-            "default": 100,
-            "allOf": [
-              {
-                "minimum": 0
-              }
-            ]
-          },
-          "mtu": {
-            "type": [
-              "integer",
-              "null"
-            ],
-            "title": "MTU",
-            "allOf": [
-              {
-                "anyOf": [
-                  {
-                    "const": 0
-                  },
-                  {
-                    "minimum": 576,
-                    "maximum": 65520
-                  }
-                ]
-              }
-            ]
-          },
-          "dhcp4": {
-            "type": "boolean",
-            "title": "DHCPv4"
-          },
-          "ip_pool": {
-            "type": "string",
-            "title": "Static IP Pool"
-          },
-          "addresses": {
-            "type": "array",
-            "title": "Static IP Addresses (CIDR)",
-            "items": {
-              "type": "string"
-            }
-          },
-          "gateway4": {
-            "type": "string",
-            "title": "IPv4 Gateway"
-          },
-          "dhcp6": {
-            "type": "boolean",
-            "title": "DHCPv6",
-            "default": false
-          },
-          "gateway6": {
-            "type": "string",
-            "title": "IPv6 Gateway"
-          },
-          "nameservers": {
-            "type": "array",
-            "title": "DNS Servers",
-            "items": {
-              "type": "string"
-            }
-          },
-          "search_domains": {
-            "type": "array",
-            "title": "DNS Search Domains",
-            "items": {
-              "type": "string"
-            }
-          },
-          "routes": {
-            "type": "array",
-            "title": "Static Routes",
-            "items": {
-              "type": "object",
-              "title": "Route",
-              "properties": {
-                "to": {
-                  "type": "string",
-                  "title": "Destination (CIDR)"
-                },
-                "via": {
-                  "type": "string",
-                  "title": "Gateway (Via)"
-                },
-                "metric": {
-                  "type": [
-                    "integer",
-                    "null"
-                  ],
-                  "title": "Metric",
-                  "allOf": [
-                    {
-                      "minimum": 0
-                    }
-                  ]
-                },
-                "on_link": {
-                  "type": "boolean",
-                  "title": "On-Link",
-                  "default": false
-                }
-              },
-              "required": [
-                "to",
-                "via"
-              ]
-            }
-          }
-        },
-        "required": [
-          "name",
-          "interfaces"
-        ]
-      }
-    },
-    "dns_servers": {
-      "type": "array",
-      "title": "Global DNS Servers",
-      "items": {
-        "type": "string"
-      }
-    },
-    "dns_search_domains": {
-      "type": "array",
-      "title": "Global DNS Search Domains",
-      "items": {
-        "type": "string"
-      }
+    "_section_provisioning": {
+      "type": "object",
+      "title": "Guest Provisioning",
+      "readOnly": true,
+      "properties": {}
     },
     "provisioning_mode": {
       "type": "string",
       "title": "Provisioning Mode",
       "default": "iso",
-      "enum": [
-        "iso",
-        "clone"
-      ],
-      "description": "'iso' boots from a Talos Image Factory ISO; 'clone' clones an existing Proxmox VM Template."
+      "description": "'iso' boots from a Talos Image Factory ISO; 'clone' clones an existing Proxmox VM Template. Select the empty first row to clear this selection.",
+      "oneOf": [
+        {
+          "const": "",
+          "title": " "
+        },
+        {
+          "const": "iso",
+          "title": "iso"
+        },
+        {
+          "const": "clone",
+          "title": "clone"
+        }
+      ]
     },
     "iso_storage": {
       "type": "string",
       "title": "ISO Storage",
-      "default": "auto",
-      "description": "ISO-capable storage for Talos ISO and Cloud-Init images ('auto' picks the first available ISO storage)."
+      "default": "",
+      "description": "ISO-capable storage for Talos ISO and Cloud-Init images (empty selects an available ISO storage). Select the empty first row to clear this selection.",
+      "oneOf": [
+        {
+          "const": "",
+          "title": " "
+        }
+      ]
     },
     "template_vmid": {
       "type": "string",
       "title": "VM Template (Clone Mode)",
-      "default": "none",
-      "description": "Proxmox VM Template to clone when Provisioning Mode is 'clone' ('none' if using ISO mode)."
+      "default": "",
+      "description": "Proxmox VM Template to clone when Provisioning Mode is 'clone'. Leave empty in ISO mode. Select the empty first row to clear this selection.",
+      "oneOf": [
+        {
+          "const": "",
+          "title": " "
+        }
+      ]
     },
     "full_clone": {
       "type": "boolean",
@@ -1117,11 +1220,21 @@
       "type": "string",
       "title": "Architecture",
       "default": "amd64",
-      "enum": [
-        "amd64",
-        "arm64"
-      ],
-      "description": "Target CPU architecture for the Talos installation media."
+      "description": "Target CPU architecture for the Talos installation media. Select the empty first row to clear this selection.",
+      "oneOf": [
+        {
+          "const": "",
+          "title": " "
+        },
+        {
+          "const": "amd64",
+          "title": "amd64"
+        },
+        {
+          "const": "arm64",
+          "title": "arm64"
+        }
+      ]
     },
     "talos_extensions": {
       "type": "array",
@@ -1141,25 +1254,65 @@
         "minLength": 1
       }
     },
+    "dns_servers": {
+      "type": "array",
+      "title": "Global DNS Servers",
+      "items": {
+        "type": "string"
+      }
+    },
+    "dns_search_domains": {
+      "type": "array",
+      "title": "Global DNS Search Domains",
+      "items": {
+        "type": "string"
+      }
+    },
+    "_section_system": {
+      "type": "object",
+      "title": "System and Firmware",
+      "readOnly": true,
+      "properties": {}
+    },
     "machine_type": {
       "type": "string",
       "title": "Machine",
       "default": "q35",
-      "enum": [
-        "q35",
-        "i440fx"
-      ],
-      "description": "QEMU machine type ('q35' recommended for PCIe/GPU passthrough)."
+      "description": "QEMU machine type ('q35' recommended for PCIe/GPU passthrough). Select the empty first row to clear this selection.",
+      "oneOf": [
+        {
+          "const": "",
+          "title": " "
+        },
+        {
+          "const": "q35",
+          "title": "q35"
+        },
+        {
+          "const": "i440fx",
+          "title": "i440fx"
+        }
+      ]
     },
     "bios": {
       "type": "string",
       "title": "BIOS / Firmware",
       "default": "seabios",
-      "enum": [
-        "seabios",
-        "ovmf"
-      ],
-      "description": "VM firmware ('ovmf' enables UEFI, EFI disk, and Secure Boot)."
+      "description": "VM firmware. 'ovmf' uses UEFI and is required for Secure Boot. Leave empty to use SeaBIOS. Select the empty first row to clear this selection.",
+      "oneOf": [
+        {
+          "const": "",
+          "title": " "
+        },
+        {
+          "const": "seabios",
+          "title": "seabios"
+        },
+        {
+          "const": "ovmf",
+          "title": "ovmf"
+        }
+      ]
     },
     "secure_boot": {
       "type": "boolean",
@@ -1177,31 +1330,81 @@
       "type": "string",
       "title": "SCSI Controller",
       "default": "virtio-scsi-single",
-      "enum": [
-        "virtio-scsi-single",
-        "virtio-scsi-pci",
-        "lsi",
-        "lsi53c810",
-        "megasas",
-        "pvscsi"
-      ],
-      "description": "SCSI controller model ('virtio-scsi-single' recommended for IOThread)."
+      "description": "SCSI controller model ('virtio-scsi-single' recommended for IOThread). Select the empty first row to clear this selection.",
+      "oneOf": [
+        {
+          "const": "",
+          "title": " "
+        },
+        {
+          "const": "virtio-scsi-single",
+          "title": "virtio-scsi-single"
+        },
+        {
+          "const": "virtio-scsi-pci",
+          "title": "virtio-scsi-pci"
+        },
+        {
+          "const": "lsi",
+          "title": "lsi"
+        },
+        {
+          "const": "lsi53c810",
+          "title": "lsi53c810"
+        },
+        {
+          "const": "megasas",
+          "title": "megasas"
+        },
+        {
+          "const": "pvscsi",
+          "title": "pvscsi"
+        }
+      ]
     },
     "vga": {
       "type": "string",
       "title": "Display (VGA)",
       "default": "std",
-      "enum": [
-        "std",
-        "virtio",
-        "virtio-gl",
-        "qxl",
-        "serial0",
-        "none",
-        "cirrus",
-        "vmware"
-      ],
-      "description": "Proxmox display adapter."
+      "description": "Proxmox display adapter. Select the empty first row to clear this selection.",
+      "oneOf": [
+        {
+          "const": "",
+          "title": " "
+        },
+        {
+          "const": "std",
+          "title": "std"
+        },
+        {
+          "const": "virtio",
+          "title": "virtio"
+        },
+        {
+          "const": "virtio-gl",
+          "title": "virtio-gl"
+        },
+        {
+          "const": "qxl",
+          "title": "qxl"
+        },
+        {
+          "const": "serial0",
+          "title": "serial0"
+        },
+        {
+          "const": "none",
+          "title": "none"
+        },
+        {
+          "const": "cirrus",
+          "title": "cirrus"
+        },
+        {
+          "const": "vmware",
+          "title": "vmware"
+        }
+      ]
     },
     "serial_console": {
       "type": "boolean",
@@ -1218,26 +1421,54 @@
     "watchdog_model": {
       "type": "string",
       "title": "Watchdog Model",
-      "default": "none",
-      "enum": [
-        "none",
-        "i6300esb",
-        "ib700"
-      ],
-      "description": "Optional virtual hardware watchdog device."
+      "default": "",
+      "description": "Optional virtual hardware watchdog device. Select the empty first row to clear this selection.",
+      "oneOf": [
+        {
+          "const": "",
+          "title": " "
+        },
+        {
+          "const": "i6300esb",
+          "title": "i6300esb"
+        },
+        {
+          "const": "ib700",
+          "title": "ib700"
+        }
+      ]
     },
     "watchdog_action": {
       "type": "string",
       "title": "Watchdog Action",
       "default": "reset",
-      "enum": [
-        "reset",
-        "poweroff",
-        "pause",
-        "debug",
-        "none"
-      ],
-      "description": "Action when the watchdog timer expires."
+      "description": "Action when the watchdog timer expires. Select the empty first row to clear this selection.",
+      "oneOf": [
+        {
+          "const": "",
+          "title": " "
+        },
+        {
+          "const": "reset",
+          "title": "reset"
+        },
+        {
+          "const": "poweroff",
+          "title": "poweroff"
+        },
+        {
+          "const": "pause",
+          "title": "pause"
+        },
+        {
+          "const": "debug",
+          "title": "debug"
+        },
+        {
+          "const": "none",
+          "title": "none"
+        }
+      ]
     },
     "startup_order": {
       "type": "string",
@@ -1253,18 +1484,45 @@
           "type": "string",
           "title": "HA State",
           "default": "none",
-          "enum": [
-            "none",
-            "started",
-            "stopped",
-            "disabled",
-            "ignored"
-          ]
+          "oneOf": [
+            {
+              "const": "",
+              "title": " "
+            },
+            {
+              "const": "none",
+              "title": "none"
+            },
+            {
+              "const": "started",
+              "title": "started"
+            },
+            {
+              "const": "stopped",
+              "title": "stopped"
+            },
+            {
+              "const": "disabled",
+              "title": "disabled"
+            },
+            {
+              "const": "ignored",
+              "title": "ignored"
+            }
+          ],
+          "description": "Select the empty first row to clear this selection."
         },
         "group": {
           "type": "string",
           "title": "HA Group",
-          "default": "none"
+          "default": "",
+          "oneOf": [
+            {
+              "const": "",
+              "title": " "
+            }
+          ],
+          "description": "Select the empty first row to clear this selection."
         },
         "max_restart": {
           "type": [
@@ -1301,11 +1559,25 @@
           "type": "string",
           "title": "Resource Affinity (PVE 9+)",
           "default": "none",
-          "enum": [
-            "none",
-            "negative",
-            "positive"
-          ]
+          "oneOf": [
+            {
+              "const": "",
+              "title": " "
+            },
+            {
+              "const": "none",
+              "title": "none"
+            },
+            {
+              "const": "negative",
+              "title": "negative"
+            },
+            {
+              "const": "positive",
+              "title": "positive"
+            }
+          ],
+          "description": "Select the empty first row to clear this selection."
         },
         "node_affinity_nodes": {
           "type": "array",
@@ -1350,7 +1622,14 @@
         "target_node": {
           "type": "string",
           "title": "Target Node",
-          "default": "auto"
+          "default": "",
+          "oneOf": [
+            {
+              "const": "",
+              "title": " "
+            }
+          ],
+          "description": "Select the empty first row to clear this selection."
         },
         "rate_limit": {
           "type": [
@@ -1387,21 +1666,49 @@
           "type": "string",
           "title": "Inbound Policy",
           "default": "ACCEPT",
-          "enum": [
-            "ACCEPT",
-            "DROP",
-            "REJECT"
-          ]
+          "oneOf": [
+            {
+              "const": "",
+              "title": " "
+            },
+            {
+              "const": "ACCEPT",
+              "title": "ACCEPT"
+            },
+            {
+              "const": "DROP",
+              "title": "DROP"
+            },
+            {
+              "const": "REJECT",
+              "title": "REJECT"
+            }
+          ],
+          "description": "Select the empty first row to clear this selection."
         },
         "policy_out": {
           "type": "string",
           "title": "Outbound Policy",
           "default": "ACCEPT",
-          "enum": [
-            "ACCEPT",
-            "DROP",
-            "REJECT"
-          ]
+          "oneOf": [
+            {
+              "const": "",
+              "title": " "
+            },
+            {
+              "const": "ACCEPT",
+              "title": "ACCEPT"
+            },
+            {
+              "const": "DROP",
+              "title": "DROP"
+            },
+            {
+              "const": "REJECT",
+              "title": "REJECT"
+            }
+          ],
+          "description": "Select the empty first row to clear this selection."
         },
         "dhcp": {
           "type": "boolean",
@@ -1431,18 +1738,49 @@
         "log_level_in": {
           "type": "string",
           "title": "Inbound Log Level",
-          "enum": [
-            "nolog",
-            "emerg",
-            "alert",
-            "crit",
-            "err",
-            "warning",
-            "notice",
-            "info",
-            "debug"
-          ],
-          "description": "Optional Proxmox inbound firewall log level."
+          "description": "Optional Proxmox inbound firewall log level. Select the empty first row to clear this selection.",
+          "oneOf": [
+            {
+              "const": "",
+              "title": " "
+            },
+            {
+              "const": "nolog",
+              "title": "nolog"
+            },
+            {
+              "const": "emerg",
+              "title": "emerg"
+            },
+            {
+              "const": "alert",
+              "title": "alert"
+            },
+            {
+              "const": "crit",
+              "title": "crit"
+            },
+            {
+              "const": "err",
+              "title": "err"
+            },
+            {
+              "const": "warning",
+              "title": "warning"
+            },
+            {
+              "const": "notice",
+              "title": "notice"
+            },
+            {
+              "const": "info",
+              "title": "info"
+            },
+            {
+              "const": "debug",
+              "title": "debug"
+            }
+          ]
         }
       }
     },
@@ -1455,7 +1793,9 @@
         "properties": {
           "mapping": {
             "type": "string",
-            "title": "PCI Mapping"
+            "title": "PCI Mapping",
+            "minLength": 1,
+            "description": "A mapping is required for each device. Clear the selection to choose another mapping, or remove this device if it is no longer needed."
           },
           "mdev": {
             "type": "string",
@@ -1493,7 +1833,8 @@
           "mapping": {
             "type": "string",
             "title": "USB Mapping",
-            "minLength": 1
+            "minLength": 1,
+            "description": "A mapping is required for each device. Clear the selection to choose another mapping, or remove this device if it is no longer needed."
           },
           "usb3": {
             "type": "boolean",

@@ -11,13 +11,8 @@ import (
 	"maps"
 	"slices"
 	"strings"
-	"time"
 
-	"github.com/cosi-project/runtime/pkg/safe"
-	"github.com/cosi-project/runtime/pkg/state"
 	"github.com/luthermonson/go-proxmox"
-	"github.com/siderolabs/omni/client/pkg/client"
-	omniinfra "github.com/siderolabs/omni/client/pkg/omni/resources/infra"
 	"go.uber.org/zap"
 )
 
@@ -121,98 +116,6 @@ func nonEmptyOrFallback(vals, fallback []string) []string {
 	}
 
 	return fallback
-}
-
-// SchemaRefresherConfig holds settings for the background dynamic schema refresher.
-type SchemaRefresherConfig struct {
-	CustomNodeGroups map[string][]string
-	ProxmoxClient    *proxmox.Client
-	Logger           *zap.Logger
-	OmniEndpoint     string
-	ProviderID       string
-	BaseSchema       string
-	LastSchema       string
-	ClientOptions    []client.Option
-	Interval         time.Duration
-}
-
-// StartSchemaRefresher periodically queries the Proxmox cluster for newly added/removed
-// nodes, node groups, storages, network bridges, SDN VNets, pools, hardware mappings, templates,
-// firewall security groups, CPU models, and HA rules, updating the ProviderStatus schema in Omni.
-func StartSchemaRefresher(ctx context.Context, cfg SchemaRefresherConfig) {
-	if cfg.Interval <= 0 || cfg.ProxmoxClient == nil || cfg.OmniEndpoint == "" {
-		return
-	}
-
-	logger := cfg.Logger
-	if logger == nil {
-		logger = zap.NewNop()
-	}
-
-	go func() {
-		ticker := time.NewTicker(cfg.Interval)
-		defer ticker.Stop()
-
-		lastSchema := cfg.LastSchema
-
-		for {
-			select {
-			case <-ctx.Done():
-				return
-			case <-ticker.C:
-				opts := DiscoverClusterOptions(ctx, cfg.ProxmoxClient, logger, cfg.CustomNodeGroups)
-				if !opts.DiscoveryComplete {
-					logger.Warn("skipping schema refresh after incomplete node/storage discovery")
-
-					continue
-				}
-
-				newSchema, err := BuildDynamicSchema(cfg.BaseSchema, opts)
-				if err != nil {
-					logger.Warn("failed to rebuild dynamic schema during periodic refresh", zap.Error(err))
-
-					continue
-				}
-
-				if newSchema == lastSchema {
-					continue
-				}
-
-				if err := publishSchemaToOmni(ctx, cfg.OmniEndpoint, cfg.ClientOptions, cfg.ProviderID, newSchema); err != nil {
-					logger.Warn("failed to publish updated dynamic schema to Omni", zap.Error(err))
-
-					continue
-				}
-
-				lastSchema = newSchema
-
-				logger.Info("updated Proxmox provider schema in Omni with latest cluster topology")
-			}
-		}
-	}()
-}
-
-func publishSchemaToOmni(ctx context.Context, omniEndpoint string, clientOpts []client.Option, providerID, newSchema string) error {
-	c, err := client.New(omniEndpoint, clientOpts...)
-	if err != nil {
-		return err
-	}
-	defer c.Close() //nolint:errcheck
-
-	return UpdateProviderStatusSchema(ctx, c.Omni().State(), providerID, newSchema)
-}
-
-// UpdateProviderStatusSchema updates the Schema field on the ProviderStatus resource in COSI state.
-func UpdateProviderStatusSchema(ctx context.Context, st state.State, providerID, newSchema string) error {
-	providerStatus := omniinfra.NewProviderStatus(providerID)
-
-	_, err := safe.StateUpdateWithConflicts(ctx, st, providerStatus.Metadata(), func(res *omniinfra.ProviderStatus) error {
-		res.TypedSpec().Value.Schema = newSchema
-
-		return nil
-	})
-
-	return err
 }
 
 type nodeTopologySets struct {
@@ -772,8 +675,7 @@ func classifyStorageContent(name, content string, diskStorages, isoStorages map[
 }
 
 // BuildDynamicSchema enriches the base Proxmox-grouped JSON schema with real cluster enum values
-// using non-empty sentinel options ('auto'/'none') for optional dropdowns so UI frameworks (Reka UI)
-// always allow clearing a selection without throwing empty-value errors.
+// including an empty choice so users can clear optional selectors.
 func BuildDynamicSchema(baseSchema string, opts ClusterOptions) (string, error) {
 	var root map[string]any
 	if err := json.Unmarshal([]byte(baseSchema), &root); err != nil {
@@ -786,20 +688,20 @@ func BuildDynamicSchema(baseSchema string, opts ClusterOptions) (string, error) 
 	}
 
 	groupNames := slices.Sorted(maps.Keys(opts.NodeGroups))
-	setEnum(props, "storage", withSentinelOption("auto", opts.DiskStorages), "auto")
+	setEnum(props, "storage", opts.DiskStorages, "")
 	setEnum(props, "network_bridge", opts.NetworkBridges, pickDefaultBridge(opts.NetworkBridges))
 
 	// 01. General
 	if genProps := sectionOrRoot(props, "general"); genProps != nil {
-		setEnum(genProps, "node_group", withSentinelOption("auto", groupNames), "auto")
-		setEnum(genProps, "node", withSentinelOption("auto", opts.Nodes), "auto")
-		setEnum(genProps, "pool", withSentinelOption("auto", opts.Pools), "auto")
+		setEnum(genProps, "node_group", groupNames, "")
+		setEnum(genProps, "node", opts.Nodes, "")
+		setEnum(genProps, "pool", opts.Pools, "")
 	}
 
 	// 02. OS & Provisioning
 	if osProps := sectionOrRoot(props, "os"); osProps != nil {
-		setEnum(osProps, "iso_storage", withSentinelOption("auto", opts.ISOStorages), "auto")
-		setEnum(osProps, "template_vmid", withSentinelOption("none", opts.Templates), "none")
+		setEnum(osProps, "iso_storage", opts.ISOStorages, "")
+		setEnum(osProps, "template_vmid", opts.Templates, "")
 	}
 
 	// 04. CPU & Memory
@@ -812,10 +714,10 @@ func BuildDynamicSchema(baseSchema string, opts ClusterOptions) (string, error) 
 		props,
 		"disks",
 		"storage",
-		withSentinelOption("auto", opts.DiskStorages),
-		"auto",
+		opts.DiskStorages,
+		"",
 	)
-	setArrayObjectPropertyEnum(props, "additional_disks", "storage", withSentinelOption("auto", opts.DiskStorages), "auto")
+	setArrayObjectPropertyEnum(props, "additional_disks", "storage", opts.DiskStorages, "")
 
 	// 06. Network
 	if netProps := sectionOrRoot(props, "network"); netProps != nil {
@@ -827,10 +729,10 @@ func BuildDynamicSchema(baseSchema string, opts ClusterOptions) (string, error) 
 	// 07. High Availability
 	setNestedArrayItemEnum(props, "ha", "node_affinity_nodes", opts.Nodes)
 	setNestedArrayItemEnum(props, "ha", "rules", opts.HARules)
-	setNestedPropertyEnum(props, "ha", "group", withSentinelOption("none", opts.HAGroups), "none")
+	setNestedPropertyEnum(props, "ha", "group", opts.HAGroups, "")
 
 	// 08. Storage Replication
-	setNestedPropertyEnum(props, "replication", "target_node", withSentinelOption("auto", opts.Nodes), "auto")
+	setNestedPropertyEnum(props, "replication", "target_node", opts.Nodes, "")
 
 	// 09. Firewall & Security
 	if fwProps := sectionOrRoot(props, "firewall"); fwProps != nil {
@@ -861,20 +763,34 @@ func nestedProperties(props map[string]any, objectField string) map[string]any {
 }
 
 func setEnum(props map[string]any, field string, values []string, defaultVal string) {
-	if len(values) == 0 {
-		return
-	}
-
 	prop, ok := props[field].(map[string]any)
 	if !ok {
 		return
 	}
 
-	prop["enum"] = values
+	setClearableChoices(prop, values)
 
 	if defaultVal != "" && slices.Contains(values, defaultVal) {
 		prop["default"] = defaultVal
 	}
+}
+
+// Omni's enum renderer passes option labels to Reka UI, which forbids empty
+// option labels. A non-empty whitespace title makes the row visually blank,
+// while oneOf maps it back to the actual empty string in provider data.
+// Other titles must equal their values so saved selections display correctly.
+func setClearableChoices(prop map[string]any, values []string) {
+	choices := []any{map[string]any{"const": "", "title": " "}}
+
+	for _, value := range values {
+		if value != "" && value != "auto" {
+			choices = append(choices, map[string]any{"const": value, "title": value})
+		}
+	}
+
+	delete(prop, "enum")
+	prop["oneOf"] = choices
+	prop["default"] = ""
 }
 
 func setTopLevelArrayItemEnum(props map[string]any, arrayField string, values []string) {
@@ -892,14 +808,11 @@ func setTopLevelArrayItemEnum(props map[string]any, arrayField string, values []
 		return
 	}
 
-	items["enum"] = values
+	setClearableChoices(items, values)
+	delete(items, "minLength")
 }
 
 func setArrayObjectPropertyEnum(props map[string]any, arrayField, itemProp string, values []string, defaultVal string) {
-	if len(values) == 0 {
-		return
-	}
-
 	arr, ok := props[arrayField].(map[string]any)
 	if !ok {
 		return
@@ -943,15 +856,11 @@ func setNestedArrayItemEnum(props map[string]any, objectField, arrayField string
 		return
 	}
 
-	items["enum"] = values
+	setClearableChoices(items, values)
 	delete(items, "pattern")
 }
 
 func setNestedPropertyEnum(props map[string]any, objectField, propField string, values []string, defaultVal string) {
-	if len(values) == 0 {
-		return
-	}
-
 	obj, ok := props[objectField].(map[string]any)
 	if !ok {
 		return
@@ -971,18 +880,6 @@ func firstOrEmpty(values []string) string {
 	}
 
 	return ""
-}
-
-func withSentinelOption(sentinel string, values []string) []string {
-	if slices.Contains(values, sentinel) {
-		return values
-	}
-
-	out := make([]string, 0, len(values)+1)
-	out = append(out, sentinel)
-	out = append(out, values...)
-
-	return out
 }
 
 func pickDefaultBridge(bridges []string) string {

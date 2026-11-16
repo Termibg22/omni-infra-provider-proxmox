@@ -1,3 +1,14 @@
+## [Omni Infra Provider Proxmox 4.1.3](https://github.com/Termibg22/omni-infra-provider-proxmox/tree/v4.1.3)
+
+- Remove workload profiles, network bonds and "legacy format" labels from the form; retain compatibility with previously saved YAML.
+- Add an empty first option to dropdowns so selections can be cleared and saved as an empty string. Remove visible `auto` options.
+- Add Boot Disk and Primary NIC headings while preserving their original flat data fields.
+- Organize advanced VM settings under separate headings without hiding saved configuration.
+- Remove periodic schema publication. Dropdown topology is discovered once at startup; the previous refresh flag is accepted but ignored.
+- Filter cleared list entries before applying HA rules, node affinity and security groups.
+- Stop requiring a CEL expression for additional disks when direct or inherited storage selection is used.
+- Verify the original Omni 1.13.3 renderer without patches. Document the independent watch-reconnection draft reset and unsupported collapsible sections.
+
 ## [Omni Infra Provider Proxmox 4.1.2](https://github.com/Termibg22/omni-infra-provider-proxmox/tree/v4.1.2)
 
 - Restore flat Machine Class fields, existing boot disk/primary NIC controls and all advanced options in unmodified Omni.

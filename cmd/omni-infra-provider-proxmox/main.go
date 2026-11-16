@@ -162,18 +162,11 @@ var rootCmd = &cobra.Command{
 
 		logger.Info("starting infra provider")
 
-		// Periodically refresh the dynamic schema in Omni if the Proxmox cluster topology changes.
-		provider.StartSchemaRefresher(cmd.Context(), provider.SchemaRefresherConfig{
-			CustomNodeGroups: proxmoxConfig.Proxmox.NodeGroups,
-			ProxmoxClient:    proxmoxClient,
-			Logger:           logger,
-			OmniEndpoint:     cfg.omniAPIEndpoint,
-			ProviderID:       meta.ProviderID,
-			BaseSchema:       baseSchema,
-			LastSchema:       activeSchema,
-			ClientOptions:    clientOptions,
-			Interval:         cfg.schemaRefreshInterval,
-		})
+		// Publish topology once at startup. Updating a live editor's schema can
+		// recreate controls in hosted Omni; discovery at provisioning remains live.
+		if cfg.schemaRefreshInterval != 0 {
+			logger.Info("schema-refresh-interval is ignored; restart the provider to refresh dropdown choices")
+		}
 
 		// Periodically reconcile MachineSet / MachineClass updates onto already-provisioned VMs.
 		provider.StartMachineSetUpdater(cmd.Context(), provider.MachineSetUpdaterConfig{
@@ -236,7 +229,7 @@ func init() {
 	rootCmd.Flags().StringVar(&cfg.providerName, "provider-name", "Proxmox", "provider name as it appears in Omni")
 	rootCmd.Flags().StringVar(&cfg.providerDescription, "provider-description", "Proxmox infrastructure provider", "Provider description as it appears in Omni")
 	rootCmd.Flags().BoolVar(&cfg.insecureSkipVerify, "insecure-skip-verify", false, "ignores untrusted certs on Omni side")
-	rootCmd.Flags().DurationVar(&cfg.schemaRefreshInterval, "schema-refresh-interval", 2*time.Minute, "interval for refreshing dynamic Proxmox cluster options in Omni schema (0 to disable)")
+	rootCmd.Flags().DurationVar(&cfg.schemaRefreshInterval, "schema-refresh-interval", 0, "deprecated compatibility flag; schema is now published only at startup")
 	rootCmd.Flags().DurationVar(&cfg.machineSetSyncInterval, "machineset-sync-interval", 0, "opt-in interval for applying MachineRequest changes to existing VMs (0 disables live updates)")
 
 	rootCmd.Flags().StringVar(&cfg.schemaMode, "schema-mode", "basic", "compatibility setting: basic and advanced both expose all supported fields")

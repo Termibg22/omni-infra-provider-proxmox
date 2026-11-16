@@ -390,6 +390,7 @@ func (d *Data) normalizeSentinels() {
 	d.Storage = stripSentinel(d.Storage)
 	d.WatchdogModel = stripSentinel(d.WatchdogModel)
 	d.Hugepages = stripSentinel(d.Hugepages)
+	d.SecurityGroups = nonBlankSelections(d.SecurityGroups)
 
 	for i := range d.Disks {
 		d.Disks[i].Storage = stripSentinel(d.Disks[i].Storage)
@@ -404,6 +405,9 @@ func (d *Data) normalizeSentinels() {
 	}
 
 	if d.HA != nil {
+		d.HA.Rules = nonBlankSelections(d.HA.Rules)
+		d.HA.NodeAffinityNodes = nonBlankSelections(d.HA.NodeAffinityNodes)
+
 		if strings.TrimSpace(d.HA.State) == "none" {
 			d.haDisabled = true
 			d.HA = nil
@@ -418,6 +422,12 @@ func (d *Data) normalizeSentinels() {
 			d.HA.ResourceAffinity = "negative"
 		}
 	}
+}
+
+// Clearing an array selector leaves an empty item in Omni. Do not turn that
+// empty choice into a request for an HA rule or node with an empty name.
+func nonBlankSelections(values []string) []string {
+	return slices.DeleteFunc(slices.Clone(values), func(value string) bool { return strings.TrimSpace(value) == "" })
 }
 
 // ApplyWorkloadProfile applies intelligent defaults for the selected `workload_profile`

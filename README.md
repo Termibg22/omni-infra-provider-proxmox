@@ -33,11 +33,11 @@ Despite its historical name, `OMNI_SERVICE_ACCOUNT_KEY` must contain an **infras
 docker run -d --name omni-proxmox --restart unless-stopped \
   --mount type=bind,source="$(pwd)/config.yaml",target=/config.yaml,readonly \
   -e OMNI_ENDPOINT -e OMNI_SERVICE_ACCOUNT_KEY \
-  ghcr.io/termibg22/omni-infra-provider-proxmox:v4.1.2 \
+  ghcr.io/termibg22/omni-infra-provider-proxmox:v4.1.3 \
   --config-file /config.yaml
 ```
 
-`v4.1.2` restores compatibility with existing flat Machine Class data and fixes node/storage discovery. It works with unmodified Omni.
+`v4.1.3` simplifies the form, adds empty choices for clearing selectors, and stops periodic schema updates. It works with unmodified Omni.
 Do not use `latest` to pin a production deployment.
 
 ## Create a Machine Class
@@ -96,27 +96,32 @@ spec:
 
 Apply it with `omnictl apply -f machine-class.yaml`, then select the class when configuring a cluster's machine sets.
 
-## Form compatibility and updates (v4.1.2)
+## Form compatibility and updates (v4.1.3)
 
 All advanced settings are exposed in both schema modes. `--schema-mode` remains accepted for compatibility.
 The hosted Omni renderer generates its own layout and ignores provider-supplied tabs and JSON Schema defaults.
-This release uses its existing controls, with full profile help in the question-mark tooltip.
+Boot Disk and Primary NIC have separate headings. All device fields retain their saved names and values.
+Every dropdown offers an empty first row to clear a selection; `auto` is no longer a visible option.
+Workload profiles and network bonds have been removed from the form. Existing YAML using those fields remains supported to avoid changing previously provisioned configurations.
+The current Omni renderer cannot collapse provider-defined sections such as VM Firewall Options; they remain visible.
 Blank placement fields mean `auto`; omitted or zero CPU/RAM values use 2 cores and 4096 MiB. Saved nonzero values are displayed directly.
 Numeric limits live in validation subschemas to avoid Omni 1.13.3 converting missing values to NaN/null on mount.
 
 Node choices come from the current `/nodes` inventory. Disk destinations require `enabled=1`, `active=1` and `images` in their per-node content list.
 A `rootdir`-only storage supports containers, not VM disks, and is excluded. Stale references in config, HA or mappings do not create selectable nodes.
-Incomplete node/storage refreshes keep the last complete schema.
+Dropdown choices are discovered and published once when the provider starts. Restart it to reflect topology changes; actual provisioning still checks current nodes and storage.
+The periodic schema publisher has been removed, including when an older deployment still passes `--schema-refresh-interval`.
 Choices describe the cluster as a whole; constrain placement when a resource is available on only some nodes.
 
-Browser reloads discard unsaved changes in hosted Omni. The provider cannot access browser drafts or change this behavior.
+Browser reloads and watch reconnections can discard unsaved changes in hosted Omni. The original Machine Class editor reloads its form when the watched class arrives again.
+Simultaneous network errors were observed across class, metrics, notification and provider streams; removing provider schema polling cannot prevent these independent SaaS/browser connection resets.
 Save the class before reloading, or edit an exported manifest locally with `omnictl`; the provider does not silently rewrite Machine Classes.
 See [EDITOR_FIXES.md](EDITOR_FIXES.md) for the issue-by-issue scope and verification.
 
 | Flag | Default | Purpose |
 | --- | --- | --- |
 | `--schema-mode` | `basic` | Compatibility flag; both values expose all settings |
-| `--schema-refresh-interval` | `2m` | Refresh discovered dropdown choices; `0` disables |
+| `--schema-refresh-interval` | `0` | Accepted for old deployments; ignored. Schema is published only at startup |
 | `--machineset-sync-interval` | `0` | Opt in to existing-VM updates, for example `30s` |
 | `--id` | `proxmox` | Infrastructure provider ID |
 | `--config-file` | required | Proxmox connection settings |
@@ -136,7 +141,7 @@ The following snippets are **provider data**, not complete Machine Class manifes
 ### Data disks and QoS
 
 ```yaml
-workload_profile: storage-node
+scsihw: virtio-scsi-single
 disks:
   - storage: local-lvm
     size: 40
@@ -151,21 +156,9 @@ disks:
 
 A data disk's `volume_name` creates a Talos `UserVolumeConfig` mounted at `/var/mnt/<name>`, matching that disk's serial.
 Names use lowercase letters, digits and hyphens; names producing the same serial are rejected.
-Workload profiles supply defaults and extra Talos extensions; explicit YAML values, including `false`, take precedence.
-Every profile keeps the same default CPU/RAM sizes. These defaults apply when provisioning new VMs; choosing a profile does not by itself reconfigure existing machines.
+Set firmware, HA, disk tuning and Talos extensions explicitly. The QEMU guest-agent extension is always included.
 
-| Profile | Defaults and implications |
-| --- | --- |
-| `standard` (also blank) | 2 cores, 1 socket, 4096 MiB RAM, 20 GiB boot disk, VirtIO NIC. No extra profile settings. |
-| `control-plane` | Startup `order=1,up=30`, i6300esb watchdog/reset, deletion protection, RNG, HA `started` with negative resource affinity. PVE 9+ affinity support required. Disable HA explicitly with `ha: {state: none}`. |
-| `storage-node` | `virtio-scsi-single`, cache `none`, AIO `io_uring`, SSD/TRIM/IO threads; adds `siderolabs/iscsi-tools` and `siderolabs/util-linux-tools`. |
-| `gpu-ai-worker` | `q35`, CPU `host`, OVMF, NUMA, ballooning off; adds NVIDIA production module/toolkit extensions. Select the PCI mapping separately. |
-| `hardened-secure` | OVMF, Secure Boot, TPM 2.0, deletion protection and RNG. Requires compatible signed Talos media. |
-
-The QEMU guest-agent Talos extension is always included. Explicit values, including `false`, take precedence over profile defaults.
-Profile disk tuning applies to the primary/unified disks; legacy `additional_disks` retain their explicitly supplied disk options.
-
-### Static addresses, pools and bonds
+### Static addresses and pools
 
 ```yaml
 nics:
@@ -179,22 +172,6 @@ Use a dedicated range excluding gateways, DHCP ranges, and manually assigned IPs
 Pool reservations are persisted in Omni before the VM starts and restored after a provider restart.
 Overlapping pools share reservations within a provider process; separate provider IDs and external IPAM systems do not coordinate leases.
 Subnet notation is also accepted, with a bounded candidate window; explicit ranges make the intended allocation limits clearer.
-
-```yaml
-nics:
-  - bridge: vmbr1
-  - bridge: vmbr2
-bonds:
-  - name: bond0
-    interfaces: [net0, net1]
-    mode: 802.3ad
-    mtu: 9000
-    addresses: [10.10.200.50/24]
-    gateway4: 10.10.200.1
-```
-
-Configure addresses/routes on the bond, rather than its member NICs.
-LACP requires compatible host/switch networking and Talos support for the supplied NoCloud configuration.
 
 ### HA, replication and hardware mappings
 
