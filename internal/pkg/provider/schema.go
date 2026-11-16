@@ -724,9 +724,9 @@ func classifyStorageContent(name, content string, diskStorages, isoStorages map[
 	}
 }
 
-// BuildDynamicSchema enriches the base JSON schema with real cluster enum values
-// and JSON Schema `dependencies` (`oneOf`) so that selecting a `node_group`, `node`,
-// `provisioning_mode`, or `bios` dynamically updates all related selectors in the Omni UI.
+// BuildDynamicSchema enriches the base Proxmox-grouped JSON schema with real cluster enum values
+// using non-empty sentinel options ('auto'/'none') for optional dropdowns so UI frameworks (Reka UI)
+// always allow clearing a selection without throwing empty-value errors.
 func BuildDynamicSchema(baseSchema string, opts ClusterOptions) (string, error) {
 	var root map[string]any
 	if err := json.Unmarshal([]byte(baseSchema), &root); err != nil {
@@ -738,46 +738,57 @@ func BuildDynamicSchema(baseSchema string, opts ClusterOptions) (string, error) 
 		return baseSchema, nil
 	}
 
-	// 1. Populate Node Groups selector
 	groupNames := slices.Sorted(maps.Keys(opts.NodeGroups))
-	setEnum(props, "node_group", withEmptyOption(groupNames), "")
 
-	// 2. Populate Nodes selector (optional: empty string means auto-select node)
-	setEnum(props, "node", withEmptyOption(opts.Nodes), "")
-	setNestedArrayItemEnum(props, "ha", "node_affinity_nodes", opts.Nodes)
-
-	// 3. Populate Storage selectors (primary, ISO, disks[], additional_disks[])
-	defaultDiskStorage := firstOrEmpty(opts.DiskStorages)
-	optionalDiskStorages := withEmptyOption(opts.DiskStorages)
-	setEnum(props, "storage", optionalDiskStorages, defaultDiskStorage)
-	setEnum(props, "iso_storage", withEmptyOption(opts.ISOStorages), firstOrEmpty(opts.ISOStorages))
-	setArrayObjectPropertyEnum(props, "disks", "storage", optionalDiskStorages, defaultDiskStorage)
-	setArrayObjectPropertyEnum(props, "additional_disks", "storage", optionalDiskStorages, defaultDiskStorage)
-
-	// 4. Populate Network bridge selectors (primary, nics[], additional_nics[])
-	defaultBridge := pickDefaultBridge(opts.NetworkBridges)
-	setEnum(props, "network_bridge", opts.NetworkBridges, defaultBridge)
-	setArrayObjectPropertyEnum(props, "nics", "bridge", opts.NetworkBridges, defaultBridge)
-	setArrayObjectPropertyEnum(props, "additional_nics", "bridge", opts.NetworkBridges, defaultBridge)
-
-	// 5. Populate Pool, Security Groups, Templates, PCI/USB Mappings, HA Groups/Rules, Replication, and CPU Types
-	setEnum(props, "pool", withEmptyOption(opts.Pools), "")
-	setEnum(props, "template_vmid", withEmptyOption(opts.Templates), firstOrEmpty(opts.Templates))
-	setTopLevelArrayItemEnum(props, "security_groups", opts.SecurityGroups)
-	setArrayObjectPropertyEnum(props, "pci_devices", "mapping", opts.PCIMappings, firstOrEmpty(opts.PCIMappings))
-	setArrayObjectPropertyEnum(props, "usb_devices", "mapping", opts.USBMappings, firstOrEmpty(opts.USBMappings))
-	setNestedArrayItemEnum(props, "ha", "rules", opts.HARules)
-	setNestedPropertyEnum(props, "ha", "group", withEmptyOption(opts.HAGroups))
-	setNestedPropertyEnum(props, "replication", "target_node", withEmptyOption(opts.Nodes))
-
-	if len(opts.CPUTypes) > 0 {
-		setEnum(props, "cpu_type", opts.CPUTypes, "x86-64-v2-AES")
+	// 01. General
+	if genProps := nestedProperties(props, "general"); genProps != nil {
+		setEnum(genProps, "node_group", withSentinelOption("auto", groupNames), "auto")
+		setEnum(genProps, "node", withSentinelOption("auto", opts.Nodes), "auto")
+		setEnum(genProps, "pool", withSentinelOption("auto", opts.Pools), "auto")
 	}
 
-	// 6. Build reactive JSON Schema dependencies so selecting a node_group, node, workload_profile,
-	// provisioning_mode, or bios automatically updates all associated selectors and defaults.
-	if deps := buildReactiveDependencies(opts, groupNames); len(deps) > 0 {
-		root["dependencies"] = deps
+	// 02. OS & Provisioning
+	if osProps := nestedProperties(props, "os"); osProps != nil {
+		setEnum(osProps, "iso_storage", withSentinelOption("auto", opts.ISOStorages), firstOrFallback(opts.ISOStorages, "auto"))
+		setEnum(osProps, "template_vmid", withSentinelOption("none", opts.Templates), "none")
+	}
+
+	// 04. CPU & Memory
+	if compProps := nestedProperties(props, "compute"); compProps != nil && len(opts.CPUTypes) > 0 {
+		setEnum(compProps, "cpu_type", opts.CPUTypes, "x86-64-v2-AES")
+	}
+
+	// 05. Disks (VM-disk-capable storages only)
+	setArrayObjectPropertyEnum(
+		props,
+		"disks",
+		"storage",
+		withSentinelOption("auto", opts.DiskStorages),
+		firstOrFallback(opts.DiskStorages, "auto"),
+	)
+
+	// 06. Network
+	if netProps := nestedProperties(props, "network"); netProps != nil {
+		setArrayObjectPropertyEnum(netProps, "nics", "bridge", opts.NetworkBridges, pickDefaultBridge(opts.NetworkBridges))
+	}
+
+	// 07. High Availability
+	setNestedArrayItemEnum(props, "ha", "node_affinity_nodes", opts.Nodes)
+	setNestedArrayItemEnum(props, "ha", "rules", opts.HARules)
+	setNestedPropertyEnum(props, "ha", "group", withSentinelOption("none", opts.HAGroups), "none")
+
+	// 08. Storage Replication
+	setNestedPropertyEnum(props, "replication", "target_node", withSentinelOption("auto", opts.Nodes), "auto")
+
+	// 09. Firewall & Security
+	if fwProps := nestedProperties(props, "firewall"); fwProps != nil {
+		setTopLevelArrayItemEnum(fwProps, "security_groups", opts.SecurityGroups)
+	}
+
+	// 10. Hardware Passthrough
+	if ptProps := nestedProperties(props, "passthrough"); ptProps != nil {
+		setArrayObjectPropertyEnum(ptProps, "pci_devices", "mapping", opts.PCIMappings, firstOrEmpty(opts.PCIMappings))
+		setArrayObjectPropertyEnum(ptProps, "usb_devices", "mapping", opts.USBMappings, firstOrEmpty(opts.USBMappings))
 	}
 
 	out, err := json.MarshalIndent(root, "", "  ")
@@ -788,246 +799,18 @@ func BuildDynamicSchema(baseSchema string, opts ClusterOptions) (string, error) 
 	return string(out), nil
 }
 
-func buildReactiveDependencies(opts ClusterOptions, groupNames []string) map[string]any {
-	deps := map[string]any{}
-
-	// Reactive cascading dependencies when selecting a `node_group`
-	if len(groupNames) > 0 {
-		branches := make([]map[string]any, 0, len(groupNames)+1)
-
-		// Default branch ("": all nodes)
-		allTopo := NodeTopology{
-			DiskStorages:   opts.DiskStorages,
-			ISOStorages:    opts.ISOStorages,
-			NetworkBridges: opts.NetworkBridges,
-			PCIMappings:    opts.PCIMappings,
-			USBMappings:    opts.USBMappings,
-		}
-		branches = append(branches, buildTopologyBranch("node_group", "", opts.Nodes, allTopo, false))
-
-		// Branch per Node Group: restricts `node`, `ha.node_affinity_nodes`, storages, bridges, and PCI/USB mappings
-		for _, gName := range groupNames {
-			gNodes := opts.NodeGroups[gName]
-			gTopo := opts.TopologyForNodes(gNodes)
-			branches = append(branches, buildTopologyBranch("node_group", gName, gNodes, gTopo, true))
-		}
-
-		deps["node_group"] = map[string]any{
-			"oneOf": branches,
-		}
+func nestedProperties(props map[string]any, objectField string) map[string]any {
+	obj, ok := props[objectField].(map[string]any)
+	if !ok {
+		return nil
 	}
 
-	// Reactive cascading dependencies when selecting a specific `node`
-	if len(opts.NodeTopologies) > 0 && len(opts.Nodes) > 0 {
-		nodeBranches := make([]map[string]any, 0, len(opts.Nodes)+1)
-		nodeBranches = append(nodeBranches, map[string]any{
-			"properties": map[string]any{
-				"node": map[string]any{"enum": []string{""}},
-			},
-		})
-
-		for _, nodeName := range opts.Nodes {
-			topo, ok := opts.NodeTopologies[nodeName]
-			if !ok {
-				continue
-			}
-
-			nodeBranches = append(nodeBranches, buildTopologyBranch("node", nodeName, nil, topo, false))
-		}
-
-		if len(nodeBranches) > 1 {
-			deps["node"] = map[string]any{
-				"oneOf": nodeBranches,
-			}
-		}
+	objProps, ok := obj["properties"].(map[string]any)
+	if !ok {
+		return nil
 	}
 
-	// Reactive presets when selecting `workload_profile`
-	deps["workload_profile"] = buildWorkloadProfileDependency()
-
-	// Reactive fields when selecting `provisioning_mode` (iso vs clone)
-	deps["provisioning_mode"] = map[string]any{
-		"oneOf": []map[string]any{
-			{
-				"properties": map[string]any{
-					"provisioning_mode": map[string]any{"enum": []string{"iso"}},
-				},
-			},
-			{
-				"properties": map[string]any{
-					"provisioning_mode": map[string]any{"enum": []string{"clone"}},
-					"full_clone":        map[string]any{"default": true},
-				},
-				"required": []string{"template_vmid"},
-			},
-		},
-	}
-
-	return deps
-}
-
-func buildWorkloadProfileDependency() map[string]any {
-	return map[string]any{
-		"oneOf": []map[string]any{
-			{
-				"properties": map[string]any{
-					"workload_profile": map[string]any{"enum": []string{"standard"}},
-				},
-			},
-			{
-				"properties": map[string]any{
-					"workload_profile": map[string]any{"enum": []string{"control-plane"}},
-					"startup_order":    map[string]any{"default": "order=1,up=30"},
-					"watchdog_model":   map[string]any{"default": "i6300esb"},
-					"watchdog_action":  map[string]any{"default": "reset"},
-					"protection":       map[string]any{"default": true},
-					"rng":              map[string]any{"default": true},
-				},
-			},
-			{
-				"properties": map[string]any{
-					"workload_profile": map[string]any{"enum": []string{"storage-node"}},
-					"scsihw":           map[string]any{"default": "virtio-scsi-single"},
-					"disk_cache":       map[string]any{"default": "none"},
-					"disk_aio":         map[string]any{"default": "io_uring"},
-					"disk_ssd":         map[string]any{"default": true},
-					"disk_discard":     map[string]any{"default": true},
-					"disk_iothread":    map[string]any{"default": true},
-					"talos_extensions": map[string]any{"default": []string{"siderolabs/iscsi-tools", "siderolabs/util-linux-tools"}},
-				},
-			},
-			{
-				"properties": map[string]any{
-					"workload_profile": map[string]any{"enum": []string{"gpu-ai-worker"}},
-					"machine_type":     map[string]any{"default": "q35"},
-					"cpu_type":         map[string]any{"default": "host"},
-					"bios":             map[string]any{"default": "ovmf"},
-					"numa":             map[string]any{"default": true},
-					"balloon":          map[string]any{"default": false},
-					"talos_extensions": map[string]any{"default": []string{"siderolabs/nonfree-kmod-nvidia-production", "siderolabs/nvidia-container-toolkit-production"}},
-				},
-			},
-			{
-				"properties": map[string]any{
-					"workload_profile": map[string]any{"enum": []string{"hardened-secure"}},
-					"bios":             map[string]any{"default": "ovmf"},
-					"secure_boot":      map[string]any{"default": true},
-					"tpm":              map[string]any{"default": true},
-					"protection":       map[string]any{"default": true},
-					"rng":              map[string]any{"default": true},
-				},
-			},
-		},
-	}
-}
-
-func buildTopologyBranch(triggerField, triggerVal string, allowedNodes []string, topo NodeTopology, setDefaultAffinity bool) map[string]any {
-	branchProps := map[string]any{
-		triggerField: map[string]any{
-			"enum": []string{triggerVal},
-		},
-	}
-
-	if len(allowedNodes) > 0 {
-		branchProps["node"] = map[string]any{
-			"enum": withEmptyOption(allowedNodes),
-		}
-
-		haAffinity := map[string]any{
-			"type":  "array",
-			"items": map[string]any{"type": "string", "enum": allowedNodes},
-		}
-		if setDefaultAffinity {
-			haAffinity["default"] = allowedNodes
-		}
-
-		branchProps["ha"] = map[string]any{
-			"properties": map[string]any{
-				"node_affinity_nodes": haAffinity,
-			},
-		}
-
-		branchProps["replication"] = map[string]any{
-			"properties": map[string]any{
-				"target_node": map[string]any{
-					"enum": withEmptyOption(allowedNodes),
-				},
-			},
-		}
-	}
-
-	if len(topo.DiskStorages) > 0 {
-		optDisk := withEmptyOption(topo.DiskStorages)
-		branchProps["storage"] = map[string]any{
-			"enum":    optDisk,
-			"default": topo.DiskStorages[0],
-		}
-		branchProps["disks"] = map[string]any{
-			"items": map[string]any{
-				"properties": map[string]any{
-					"storage": map[string]any{
-						"enum":    optDisk,
-						"default": topo.DiskStorages[0],
-					},
-				},
-			},
-		}
-	}
-
-	if len(topo.ISOStorages) > 0 {
-		branchProps["iso_storage"] = map[string]any{
-			"enum":    withEmptyOption(topo.ISOStorages),
-			"default": topo.ISOStorages[0],
-		}
-	}
-
-	if len(topo.NetworkBridges) > 0 {
-		defBridge := pickDefaultBridge(topo.NetworkBridges)
-		branchProps["network_bridge"] = map[string]any{
-			"enum":    topo.NetworkBridges,
-			"default": defBridge,
-		}
-		branchProps["nics"] = map[string]any{
-			"items": map[string]any{
-				"properties": map[string]any{
-					"bridge": map[string]any{
-						"enum":    topo.NetworkBridges,
-						"default": defBridge,
-					},
-				},
-			},
-		}
-	}
-
-	if len(topo.PCIMappings) > 0 {
-		branchProps["pci_devices"] = map[string]any{
-			"items": map[string]any{
-				"properties": map[string]any{
-					"mapping": map[string]any{
-						"enum":    topo.PCIMappings,
-						"default": topo.PCIMappings[0],
-					},
-				},
-			},
-		}
-	}
-
-	if len(topo.USBMappings) > 0 {
-		branchProps["usb_devices"] = map[string]any{
-			"items": map[string]any{
-				"properties": map[string]any{
-					"mapping": map[string]any{
-						"enum":    topo.USBMappings,
-						"default": topo.USBMappings[0],
-					},
-				},
-			},
-		}
-	}
-
-	return map[string]any{
-		"properties": branchProps,
-	}
+	return objProps
 }
 
 func setEnum(props map[string]any, field string, values []string, defaultVal string) {
@@ -1117,7 +900,7 @@ func setNestedArrayItemEnum(props map[string]any, objectField, arrayField string
 	delete(items, "pattern")
 }
 
-func setNestedPropertyEnum(props map[string]any, objectField, propField string, values []string) {
+func setNestedPropertyEnum(props map[string]any, objectField, propField string, values []string, defaultVal string) {
 	if len(values) == 0 {
 		return
 	}
@@ -1132,7 +915,7 @@ func setNestedPropertyEnum(props map[string]any, objectField, propField string, 
 		return
 	}
 
-	setEnum(objProps, propField, values, "")
+	setEnum(objProps, propField, values, defaultVal)
 }
 
 func firstOrEmpty(values []string) string {
@@ -1143,13 +926,21 @@ func firstOrEmpty(values []string) string {
 	return ""
 }
 
-func withEmptyOption(values []string) []string {
-	if len(values) == 0 || slices.Contains(values, "") {
+func firstOrFallback(values []string, fallback string) string {
+	if len(values) > 0 {
+		return values[0]
+	}
+
+	return fallback
+}
+
+func withSentinelOption(sentinel string, values []string) []string {
+	if slices.Contains(values, sentinel) {
 		return values
 	}
 
 	out := make([]string, 0, len(values)+1)
-	out = append(out, "")
+	out = append(out, sentinel)
 	out = append(out, values...)
 
 	return out

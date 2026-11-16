@@ -500,12 +500,27 @@ func TestBuildDynamicSchemaInjectsClusterOptions(t *testing.T) {
 	baseSchema := `{
   "type": "object",
   "properties": {
-    "node": {"type": "string"},
-    "storage": {"type": "string"},
-    "iso_storage": {"type": "string"},
-    "network_bridge": {"type": "string"},
-    "pool": {"type": "string"},
-    "cpu_type": {"type": "string"},
+    "general": {
+      "type": "object",
+      "properties": {
+        "node_group": {"type": "string"},
+        "node": {"type": "string"},
+        "pool": {"type": "string"}
+      }
+    },
+    "os": {
+      "type": "object",
+      "properties": {
+        "iso_storage": {"type": "string"},
+        "template_vmid": {"type": "string"}
+      }
+    },
+    "compute": {
+      "type": "object",
+      "properties": {
+        "cpu_type": {"type": "string"}
+      }
+    },
     "disks": {
       "type": "array",
       "items": {
@@ -515,36 +530,47 @@ func TestBuildDynamicSchemaInjectsClusterOptions(t *testing.T) {
         }
       }
     },
-    "nics": {
-      "type": "array",
-      "items": {
-        "type": "object",
-        "properties": {
-          "bridge": {"type": "string"}
+    "network": {
+      "type": "object",
+      "properties": {
+        "nics": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "bridge": {"type": "string"}
+            }
+          }
         }
       }
     },
-    "pci_devices": {
-      "type": "array",
-      "items": {
-        "type": "object",
-        "properties": {
-          "mapping": {"type": "string"}
-        }
-      }
-    },
-    "usb_devices": {
-      "type": "array",
-      "items": {
-        "type": "object",
-        "properties": {
-          "mapping": {"type": "string"}
+    "passthrough": {
+      "type": "object",
+      "properties": {
+        "pci_devices": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "mapping": {"type": "string"}
+            }
+          }
+        },
+        "usb_devices": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "mapping": {"type": "string"}
+            }
+          }
         }
       }
     },
     "ha": {
       "type": "object",
       "properties": {
+        "group": {"type": "string"},
         "node_affinity_nodes": {"type": "array", "items": {"type": "string"}},
         "rules": {"type": "array", "items": {"type": "string"}}
       }
@@ -571,6 +597,9 @@ func TestBuildDynamicSchemaInjectsClusterOptions(t *testing.T) {
 	require.Contains(t, dynamic, `"zigbee-dongle"`)
 	require.Contains(t, dynamic, `"spread-workers"`)
 	require.Contains(t, dynamic, `"custom-epyc"`)
+	// Must use non-empty sentinel values ("auto"/"none") instead of "" for Reka UI compatibility
+	require.Contains(t, dynamic, `"auto"`)
+	require.Contains(t, dynamic, `"none"`)
 }
 
 func TestIPPoolAllocator(t *testing.T) {
@@ -830,83 +859,85 @@ func TestDiscoverClusterOptionsAgainstMockProxmox(t *testing.T) {
 	require.Equal(t, []string{"pve1"}, opts.NodeGroups["rack-a"])
 }
 
-func TestNodeGroupsAndReactiveDependenciesInSchema(t *testing.T) {
+func TestGroupedProxmoxSchemaAndDataNormalization(t *testing.T) {
 	baseSchema := `{
   "type": "object",
   "properties": {
-    "node_group": {"type": "string"},
-    "node": {"type": "string"},
-    "storage": {"type": "string"},
-    "iso_storage": {"type": "string"},
-    "network_bridge": {"type": "string"},
-    "pool": {"type": "string"},
-    "template_vmid": {"type": "string"},
-    "security_groups": {"type": "array", "items": {"type": "string"}},
-    "cpu_type": {"type": "string"},
+    "general": {"type": "object", "properties": {"node_group": {"type": "string"}, "node": {"type": "string"}, "pool": {"type": "string"}}},
+    "os": {"type": "object", "properties": {"iso_storage": {"type": "string"}, "template_vmid": {"type": "string"}}},
+    "compute": {"type": "object", "properties": {"cpu_type": {"type": "string"}}},
     "disks": {"type": "array", "items": {"type": "object", "properties": {"storage": {"type": "string"}}}},
-    "nics": {"type": "array", "items": {"type": "object", "properties": {"bridge": {"type": "string"}}}},
-    "pci_devices": {"type": "array", "items": {"type": "object", "properties": {"mapping": {"type": "string"}}}},
-    "usb_devices": {"type": "array", "items": {"type": "object", "properties": {"mapping": {"type": "string"}}}},
-    "ha": {"type": "object", "properties": {"node_affinity_nodes": {"type": "array", "items": {"type": "string"}}, "rules": {"type": "array", "items": {"type": "string"}}}}
+    "network": {"type": "object", "properties": {"nics": {"type": "array", "items": {"type": "object", "properties": {"bridge": {"type": "string"}}}}}},
+    "ha": {"type": "object", "properties": {
+      "group": {"type": "string"},
+      "node_affinity_nodes": {"type": "array", "items": {"type": "string"}},
+      "rules": {"type": "array", "items": {"type": "string"}}
+    }},
+    "replication": {"type": "object", "properties": {"target_node": {"type": "string"}}},
+    "firewall": {"type": "object", "properties": {"security_groups": {"type": "array", "items": {"type": "string"}}}},
+    "passthrough": {"type": "object", "properties": {
+      "pci_devices": {"type": "array", "items": {"type": "object", "properties": {"mapping": {"type": "string"}}}},
+      "usb_devices": {"type": "array", "items": {"type": "object", "properties": {"mapping": {"type": "string"}}}}
+    }}
   }
 }`
 
 	opts := provider.ClusterOptions{
-		Nodes: []string{"pve1", "pve2", "pve3"},
-		NodeGroups: map[string][]string{
-			"gpu-rack": {"pve3"},
-			"std-rack": {"pve1", "pve2"},
-		},
-		NodeTopologies: map[string]provider.NodeTopology{
-			"pve1": {
-				DiskStorages:   []string{"ceph-rbd", "local-lvm"},
-				ISOStorages:    []string{"local"},
-				NetworkBridges: []string{"vmbr0"},
-			},
-			"pve2": {
-				DiskStorages:   []string{"ceph-rbd", "local-lvm"},
-				ISOStorages:    []string{"local"},
-				NetworkBridges: []string{"vmbr0"},
-			},
-			"pve3": {
-				DiskStorages:   []string{"nvme-gpu"},
-				ISOStorages:    []string{"cephfs-iso"},
-				NetworkBridges: []string{"vmbr0", "vmbr-rdma"},
-				PCIMappings:    []string{"nvidia-h100"},
-				USBMappings:    []string{"dongle-1"},
-			},
-		},
-		DiskStorages:   []string{"ceph-rbd", "local-lvm", "nvme-gpu"},
-		ISOStorages:    []string{"cephfs-iso", "local"},
+		Nodes:          []string{"pve1", "pve2", "pve3"},
+		NodeGroups:     map[string][]string{"gpu-rack": {"pve3"}, "std-rack": {"pve1", "pve2"}},
+		DiskStorages:   []string{"ceph-rbd", "local-lvm"},
+		ISOStorages:    []string{"local"},
 		NetworkBridges: []string{"vmbr0", "vmbr-rdma"},
 		PCIMappings:    []string{"nvidia-h100"},
 		USBMappings:    []string{"dongle-1"},
 		SecurityGroups: []string{"sg-k8s-nodes"},
 		Templates:      []string{"9000 (talos-1.9)"},
+		HAGroups:       []string{"ha-prod"},
 	}
 
 	dynamicJSON, err := provider.BuildDynamicSchema(baseSchema, opts)
 	require.NoError(t, err)
-
-	var parsed map[string]any
-	require.NoError(t, json.Unmarshal([]byte(dynamicJSON), &parsed))
-
-	deps, ok := parsed["dependencies"].(map[string]any)
-	require.True(t, ok, "schema must include reactive dependencies")
-
-	ngDep, ok := deps["node_group"].(map[string]any)
-	require.True(t, ok, "dependencies must include node_group")
-
-	oneOf, ok := ngDep["oneOf"].([]any)
-	require.True(t, ok)
-	require.Len(t, oneOf, 3, "must have branches for '', 'gpu-rack', and 'std-rack'")
-
-	// Verify that the gpu-rack branch scopes node to ["", "pve3"], storage to ["", "nvme-gpu"], and bridge to ["vmbr0", "vmbr-rdma"]
 	require.Contains(t, dynamicJSON, `"gpu-rack"`)
-	require.Contains(t, dynamicJSON, `"nvme-gpu"`)
+	require.Contains(t, dynamicJSON, `"ceph-rbd"`)
 	require.Contains(t, dynamicJSON, `"vmbr-rdma"`)
 	require.Contains(t, dynamicJSON, `"sg-k8s-nodes"`)
 	require.Contains(t, dynamicJSON, `"9000 (talos-1.9)"`)
+	require.Contains(t, dynamicJSON, `"ha-prod"`)
+
+	// Verify Data.Normalize() flattens grouped sections and strips "auto"/"none" sentinels
+	data := provider.Data{
+		General: &provider.GeneralSection{
+			NodeGroup: "auto",
+			Node:      "pve2",
+			Pool:      "auto",
+		},
+		OS: &provider.OSSection{
+			ProvisioningMode: "iso",
+			ISOStorage:       "local",
+			TemplateVMID:     "none",
+		},
+		Compute: &provider.ComputeSection{
+			Cores:  8,
+			Memory: 16384,
+		},
+		Disks: []provider.Disk{
+			{Storage: "auto", Size: 80},
+		},
+		Network: &provider.NetworkSection{
+			NICs: []provider.NIC{{Bridge: "vmbr0"}},
+		},
+	}
+
+	data.Normalize()
+	require.Empty(t, data.NodeGroup)
+	require.Equal(t, "pve2", data.Node)
+	require.Empty(t, data.Pool)
+	require.Equal(t, "local", data.ISOStorage)
+	require.Empty(t, data.TemplateVMID)
+	require.Equal(t, 8, data.Cores)
+	require.Equal(t, uint64(16384), data.Memory)
+	require.Empty(t, data.Disks[0].Storage)
+	require.Len(t, data.NICs, 1)
 }
 
 func TestFilterNodesByGroupAndTopology(t *testing.T) {

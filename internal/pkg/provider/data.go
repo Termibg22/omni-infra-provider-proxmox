@@ -54,9 +54,92 @@ type NetBond struct {
 	MTU                int      `yaml:"mtu,omitempty"`
 }
 
+// GeneralSection groups Proxmox VM general placement and metadata fields from the UI schema.
+type GeneralSection struct {
+	OnBoot            *bool    `yaml:"onboot,omitempty"`
+	AutoCreatePool    *bool    `yaml:"auto_create_pool,omitempty"`
+	WorkloadProfile   string   `yaml:"workload_profile,omitempty"`
+	NodeGroup         string   `yaml:"node_group,omitempty"`
+	Node              string   `yaml:"node,omitempty"`
+	PlacementStrategy string   `yaml:"placement_strategy,omitempty"`
+	Pool              string   `yaml:"pool,omitempty"`
+	Description       string   `yaml:"description,omitempty"`
+	Tags              []string `yaml:"tags,omitempty"`
+	MinVMID           int      `yaml:"min_vmid,omitempty"`
+	MaxVMID           int      `yaml:"max_vmid,omitempty"`
+	Protection        bool     `yaml:"protection,omitempty"`
+}
+
+// OSSection groups Proxmox OS / ISO / Template provisioning fields from the UI schema.
+type OSSection struct {
+	FullClone        *bool    `yaml:"full_clone,omitempty"`
+	ProvisioningMode string   `yaml:"provisioning_mode,omitempty"`
+	ISOStorage       string   `yaml:"iso_storage,omitempty"`
+	TemplateVMID     string   `yaml:"template_vmid,omitempty"`
+	Architecture     string   `yaml:"architecture,omitempty"`
+	TalosExtensions  []string `yaml:"talos_extensions,omitempty"`
+	ExtraKernelArgs  []string `yaml:"extra_kernel_args,omitempty"`
+}
+
+// SystemSection groups Proxmox VM system, firmware, display, and watchdog fields from the UI schema.
+type SystemSection struct {
+	RNG            *bool  `yaml:"rng,omitempty"`
+	MachineType    string `yaml:"machine_type,omitempty"`
+	Bios           string `yaml:"bios,omitempty"`
+	SCSIHW         string `yaml:"scsihw,omitempty"`
+	VGA            string `yaml:"vga,omitempty"`
+	WatchdogModel  string `yaml:"watchdog_model,omitempty"`
+	WatchdogAction string `yaml:"watchdog_action,omitempty"`
+	StartupOrder   string `yaml:"startup_order,omitempty"`
+	SecureBoot     bool   `yaml:"secure_boot,omitempty"`
+	TPM            bool   `yaml:"tpm,omitempty"`
+	SerialConsole  bool   `yaml:"serial_console,omitempty"`
+}
+
+// ComputeSection groups Proxmox CPU and memory fields from the UI schema.
+type ComputeSection struct {
+	Balloon   *bool   `yaml:"balloon,omitempty"`
+	CPUType   string  `yaml:"cpu_type,omitempty"`
+	CPUFlags  string  `yaml:"cpu_flags,omitempty"`
+	Hugepages string  `yaml:"hugepages,omitempty"`
+	Memory    uint64  `yaml:"memory,omitempty"`
+	CPULimit  float64 `yaml:"cpu_limit,omitempty"`
+	Cores     int     `yaml:"cores,omitempty"`
+	Sockets   int     `yaml:"sockets,omitempty"`
+	CPUUnits  int     `yaml:"cpu_units,omitempty"`
+	NUMA      bool    `yaml:"numa,omitempty"`
+}
+
+// NetworkSection groups Proxmox NICs, LACP bonds, and global DNS fields from the UI schema.
+type NetworkSection struct {
+	NICs             []NIC     `yaml:"nics,omitempty"`
+	Bonds            []NetBond `yaml:"bonds,omitempty"`
+	DNSServers       []string  `yaml:"dns_servers,omitempty"`
+	DNSSearchDomains []string  `yaml:"dns_search_domains,omitempty"`
+}
+
+// FirewallSection groups Proxmox security groups and VM firewall options from the UI schema.
+type FirewallSection struct {
+	Options        *VMFirewallOptions `yaml:"options,omitempty"`
+	SecurityGroups []string           `yaml:"security_groups,omitempty"`
+}
+
+// PassthroughSection groups PCI and USB hardware passthrough devices from the UI schema.
+type PassthroughSection struct {
+	PCIDevices []PCIDevice `yaml:"pci_devices,omitempty"`
+	USBDevices []USBDevice `yaml:"usb_devices,omitempty"`
+}
+
 // Data is the provider custom machine config.
 type Data struct {
-	Balloon *bool `yaml:"balloon,omitempty"`
+	General     *GeneralSection     `yaml:"general,omitempty"`
+	OS          *OSSection          `yaml:"os,omitempty"`
+	System      *SystemSection      `yaml:"system,omitempty"`
+	Compute     *ComputeSection     `yaml:"compute,omitempty"`
+	Network     *NetworkSection     `yaml:"network,omitempty"`
+	Firewall    *FirewallSection    `yaml:"firewall,omitempty"`
+	Passthrough *PassthroughSection `yaml:"passthrough,omitempty"`
+	Balloon     *bool               `yaml:"balloon,omitempty"`
 	// HA registers the VM as a Proxmox HA resource; its presence also hands placement to HA (pickNode stops spreading the set).
 	HA               *ha.Config         `yaml:"ha,omitempty"`
 	Replication      *ReplicationConfig `yaml:"replication,omitempty"`
@@ -123,11 +206,194 @@ type Data struct {
 	TPM               bool             `yaml:"tpm,omitempty"`
 	Protection        bool             `yaml:"protection,omitempty"`
 	SerialConsole     bool             `yaml:"serial_console,omitempty"`
+	normalized        bool
+}
+
+func stripSentinel(v string) string {
+	switch strings.TrimSpace(v) {
+	case "auto", "none":
+		return ""
+	default:
+		return v
+	}
+}
+
+// Normalize flattens Proxmox-grouped UI schema sections (`general`, `os`, `system`, `compute`,
+// `network`, `firewall`, `passthrough`) onto top-level Data fields and strips UI sentinel values
+// (`auto`, `none`) while preserving full backward compatibility with flat YAML configs.
+func (d *Data) Normalize() {
+	if d.normalized {
+		return
+	}
+
+	d.normalized = true
+
+	d.normalizeGeneralAndOS()
+	d.normalizeSystemAndCompute()
+	d.normalizeNetworkFirewallPassthrough()
+	d.normalizeSentinels()
+}
+
+func (d *Data) normalizeGeneralAndOS() {
+	if g := d.General; g != nil {
+		d.WorkloadProfile = cmp.Or(g.WorkloadProfile, d.WorkloadProfile)
+		d.NodeGroup = cmp.Or(g.NodeGroup, d.NodeGroup)
+		d.Node = cmp.Or(g.Node, d.Node)
+		d.PlacementStrategy = cmp.Or(g.PlacementStrategy, d.PlacementStrategy)
+		d.Pool = cmp.Or(g.Pool, d.Pool)
+		d.Description = cmp.Or(g.Description, d.Description)
+		d.MinVMID = cmp.Or(g.MinVMID, d.MinVMID)
+		d.MaxVMID = cmp.Or(g.MaxVMID, d.MaxVMID)
+		d.Protection = g.Protection || d.Protection
+
+		if g.OnBoot != nil && d.OnBoot == nil {
+			d.OnBoot = g.OnBoot
+		}
+
+		if g.AutoCreatePool != nil && d.AutoCreatePool == nil {
+			d.AutoCreatePool = g.AutoCreatePool
+		}
+
+		if len(g.Tags) > 0 && len(d.Tags) == 0 {
+			d.Tags = g.Tags
+		}
+	}
+
+	if o := d.OS; o != nil {
+		d.ProvisioningMode = cmp.Or(o.ProvisioningMode, d.ProvisioningMode)
+		d.ISOStorage = cmp.Or(o.ISOStorage, d.ISOStorage)
+		d.TemplateVMID = cmp.Or(o.TemplateVMID, d.TemplateVMID)
+		d.Architecture = cmp.Or(o.Architecture, d.Architecture)
+
+		if o.FullClone != nil && d.FullClone == nil {
+			d.FullClone = o.FullClone
+		}
+
+		if len(o.TalosExtensions) > 0 && len(d.TalosExtensions) == 0 {
+			d.TalosExtensions = o.TalosExtensions
+		}
+
+		if len(o.ExtraKernelArgs) > 0 && len(d.ExtraKernelArgs) == 0 {
+			d.ExtraKernelArgs = o.ExtraKernelArgs
+		}
+	}
+}
+
+func (d *Data) normalizeSystemAndCompute() {
+	if s := d.System; s != nil {
+		d.MachineType = cmp.Or(s.MachineType, d.MachineType)
+		d.Bios = cmp.Or(s.Bios, d.Bios)
+		d.SCSIHW = cmp.Or(s.SCSIHW, d.SCSIHW)
+		d.VGA = cmp.Or(s.VGA, d.VGA)
+		d.WatchdogModel = cmp.Or(s.WatchdogModel, d.WatchdogModel)
+		d.WatchdogAction = cmp.Or(s.WatchdogAction, d.WatchdogAction)
+		d.StartupOrder = cmp.Or(s.StartupOrder, d.StartupOrder)
+		d.SecureBoot = s.SecureBoot || d.SecureBoot
+		d.TPM = s.TPM || d.TPM
+		d.SerialConsole = s.SerialConsole || d.SerialConsole
+
+		if s.RNG != nil && d.RNG == nil {
+			d.RNG = s.RNG
+		}
+	}
+
+	if c := d.Compute; c != nil {
+		d.Cores = cmp.Or(c.Cores, d.Cores)
+		d.Sockets = cmp.Or(c.Sockets, d.Sockets)
+		d.CPUType = cmp.Or(c.CPUType, d.CPUType)
+		d.CPUFlags = cmp.Or(c.CPUFlags, d.CPUFlags)
+		d.Hugepages = cmp.Or(c.Hugepages, d.Hugepages)
+		d.Memory = cmp.Or(c.Memory, d.Memory)
+		d.CPULimit = cmp.Or(c.CPULimit, d.CPULimit)
+		d.CPUUnits = cmp.Or(c.CPUUnits, d.CPUUnits)
+		d.NUMA = c.NUMA || d.NUMA
+
+		if c.Balloon != nil && d.Balloon == nil {
+			d.Balloon = c.Balloon
+		}
+	}
+}
+
+func (d *Data) normalizeNetworkFirewallPassthrough() {
+	if n := d.Network; n != nil {
+		if len(n.NICs) > 0 && len(d.NICs) == 0 {
+			d.NICs = n.NICs
+		}
+
+		if len(n.Bonds) > 0 && len(d.Bonds) == 0 {
+			d.Bonds = n.Bonds
+		}
+
+		if len(n.DNSServers) > 0 && len(d.DNSServers) == 0 {
+			d.DNSServers = n.DNSServers
+		}
+
+		if len(n.DNSSearchDomains) > 0 && len(d.DNSSearchDomains) == 0 {
+			d.DNSSearchDomains = n.DNSSearchDomains
+		}
+	}
+
+	if fw := d.Firewall; fw != nil {
+		if len(fw.SecurityGroups) > 0 && len(d.SecurityGroups) == 0 {
+			d.SecurityGroups = fw.SecurityGroups
+		}
+
+		if fw.Options != nil && d.FirewallOptions == nil {
+			d.FirewallOptions = fw.Options
+		}
+	}
+
+	if p := d.Passthrough; p != nil {
+		if len(p.PCIDevices) > 0 && len(d.PCIDevices) == 0 {
+			d.PCIDevices = p.PCIDevices
+		}
+
+		if len(p.USBDevices) > 0 && len(d.USBDevices) == 0 {
+			d.USBDevices = p.USBDevices
+		}
+	}
+}
+
+func (d *Data) normalizeSentinels() {
+	d.NodeGroup = stripSentinel(d.NodeGroup)
+	d.Node = stripSentinel(d.Node)
+	d.Pool = stripSentinel(d.Pool)
+	d.ISOStorage = stripSentinel(d.ISOStorage)
+	d.TemplateVMID = stripSentinel(d.TemplateVMID)
+	d.Storage = stripSentinel(d.Storage)
+	d.WatchdogModel = stripSentinel(d.WatchdogModel)
+	d.Hugepages = stripSentinel(d.Hugepages)
+
+	for i := range d.Disks {
+		d.Disks[i].Storage = stripSentinel(d.Disks[i].Storage)
+	}
+
+	if d.Replication != nil {
+		d.Replication.TargetNode = stripSentinel(d.Replication.TargetNode)
+	}
+
+	if d.HA != nil {
+		d.HA.State = stripSentinel(d.HA.State)
+		d.HA.Group = stripSentinel(d.HA.Group)
+		d.HA.ResourceAffinity = stripSentinel(d.HA.ResourceAffinity)
+
+		if d.HA.State == "" && d.HA.Group == "" && d.HA.ResourceAffinity == "" &&
+			len(d.HA.Rules) == 0 && len(d.HA.NodeAffinityNodes) == 0 && d.HA.Comment == "" {
+			d.HA = nil
+		}
+	}
+
+	if d.FirewallOptions != nil && (d.FirewallOptions.Enable == nil || !*d.FirewallOptions.Enable) &&
+		d.FirewallOptions.PolicyIn == "ACCEPT" && d.FirewallOptions.PolicyOut == "ACCEPT" {
+		d.FirewallOptions = nil
+	}
 }
 
 // ApplyWorkloadProfile applies intelligent defaults for the selected `workload_profile`
 // without overwriting any field the user explicitly set.
 func (d *Data) ApplyWorkloadProfile() {
+	d.Normalize()
+
 	switch d.WorkloadProfile {
 	case "control-plane":
 		d.StartupOrder = cmp.Or(d.StartupOrder, "order=1,up=30")
