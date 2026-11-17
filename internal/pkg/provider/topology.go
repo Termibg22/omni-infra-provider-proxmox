@@ -143,9 +143,13 @@ func (p *Provisioner) filterNodesByGroupAndTopology(
 		candidates = filtered
 	}
 
-	// If PCI or USB passthrough mappings are requested, prefer nodes where all requested mappings exist
+	// PCI/USB passthrough requires a node where every requested mapping exists.
 	if len(data.PCIDevices) > 0 || len(data.USBDevices) > 0 {
-		hwFiltered := p.filterNodesWithHardwareMappings(ctx, candidates, data)
+		hwFiltered, err := p.filterNodesWithHardwareMappings(ctx, candidates, data)
+		if err != nil {
+			return nil, err
+		}
+
 		if len(hwFiltered) == 0 {
 			return nil, fmt.Errorf("no node provides all requested PCI/USB mappings")
 		}
@@ -156,32 +160,38 @@ func (p *Provisioner) filterNodesByGroupAndTopology(
 	return candidates, nil
 }
 
-func (p *Provisioner) filterNodesWithHardwareMappings(ctx context.Context, candidates proxmox.NodeStatuses, data Data) proxmox.NodeStatuses {
+func (p *Provisioner) filterNodesWithHardwareMappings(ctx context.Context, candidates proxmox.NodeStatuses, data Data) (proxmox.NodeStatuses, error) {
 	cluster := new(proxmox.Cluster).New(p.proxmoxClient)
 	allowedByMapping := make(map[string][]string)
 
 	if len(data.PCIDevices) > 0 {
-		if pciMappings, err := cluster.PCIMappings(ctx, ""); err == nil {
-			for _, m := range pciMappings {
-				if m != nil && m.ID != "" {
-					allowedByMapping["pci:"+m.ID] = extractNodesFromMappingEntries(m.Map)
-				}
+		pciMappings, err := cluster.PCIMappings(ctx, "")
+		if err != nil {
+			return nil, fmt.Errorf("cannot read Proxmox PCI resource mappings: %w", err)
+		}
+
+		for _, m := range pciMappings {
+			if m != nil && m.ID != "" {
+				allowedByMapping["pci:"+m.ID] = extractNodesFromMappingEntries(m.Map)
 			}
 		}
 	}
 
 	if len(data.USBDevices) > 0 {
-		if usbMappings, err := cluster.USBMappings(ctx, ""); err == nil {
-			for _, m := range usbMappings {
-				if m != nil && m.ID != "" {
-					allowedByMapping["usb:"+m.ID] = extractNodesFromMappingEntries(m.Map)
-				}
+		usbMappings, err := cluster.USBMappings(ctx, "")
+		if err != nil {
+			return nil, fmt.Errorf("cannot read Proxmox USB resource mappings: %w", err)
+		}
+
+		for _, m := range usbMappings {
+			if m != nil && m.ID != "" {
+				allowedByMapping["usb:"+m.ID] = extractNodesFromMappingEntries(m.Map)
 			}
 		}
 	}
 
 	if len(allowedByMapping) == 0 {
-		return nil
+		return nil, nil
 	}
 
 	var matched proxmox.NodeStatuses
@@ -194,7 +204,7 @@ func (p *Provisioner) filterNodesWithHardwareMappings(ctx context.Context, candi
 		matched = append(matched, n)
 	}
 
-	return matched
+	return matched, nil
 }
 
 func nodeHasAllMappings(nodeName string, data Data, allowedByMapping map[string][]string) bool {

@@ -95,6 +95,7 @@ func TestEditorDiscoveryUsesCurrentNodesAndUsableVMDiskStorage(t *testing.T) {
 	require.Equal(t, []string{"local"}, opts.ISOStorages)
 	require.Equal(t, map[string][]string{"current-group": {"pve"}}, opts.NodeGroups)
 	require.NotContains(t, opts.NodeTopologies, "pve2")
+	require.Empty(t, opts.PCIMappings)
 }
 
 // Omni 1.13.3 clamps absent numbers with Math.max/min and writes NaN into the
@@ -110,11 +111,8 @@ func TestEditorSchemaDoesNotMutateAbsentNumbersOrOverrideLegacyDevices(t *testin
 	properties, ok := root["properties"].(map[string]any)
 	require.True(t, ok)
 
-	for _, key := range []string{"disks", "nics"} {
-		field, fieldOK := properties[key].(map[string]any)
-		require.True(t, fieldOK)
-		require.NotContains(t, field, "default", "must not replace existing legacy devices")
-		require.NotContains(t, field, "minItems", "an empty override retains the legacy devices")
+	for _, key := range []string{"storage_selector", "disks", "nics", "firewall_options", "replication"} {
+		require.NotContains(t, properties, key)
 	}
 }
 
@@ -138,7 +136,7 @@ func assertOmniSafeNumericBounds(t *testing.T, value any, path string) {
 	}
 }
 
-func TestEditorSchemaKeepsAllLegacyAndAdvancedFields(t *testing.T) {
+func TestEditorSchemaKeepsRequestedVMControls(t *testing.T) {
 	base, err := os.ReadFile("../../../cmd/omni-infra-provider-proxmox/data/schema.json")
 	require.NoError(t, err)
 
@@ -155,8 +153,8 @@ func TestEditorSchemaKeepsAllLegacyAndAdvancedFields(t *testing.T) {
 		require.NoError(t, json.Unmarshal(root["properties"], &properties))
 
 		for _, key := range []string{
-			"cores", "memory", "disk_size", "storage_selector", "network_bridge", "bios", "cpu_flags",
-			"talos_extensions", "ha", "replication", "firewall_options", "pci_devices", "usb_devices", "_section_boot_disk", "_section_primary_nic",
+			"cores", "memory", "disk_size", "storage", "network_bridge", "bios", "cpu_flags",
+			"talos_extensions", "ha", "pci_devices", "usb_devices", "_section_boot_disk", "_section_primary_nic",
 		} {
 			require.Contains(t, properties, key)
 		}
@@ -204,4 +202,82 @@ ha:
 	require.Equal(t, []string{"web"}, data.SecurityGroups)
 	require.Equal(t, []string{"spread-workers"}, data.HA.Rules)
 	require.Equal(t, []string{"pve1"}, data.HA.NodeAffinityNodes)
+}
+
+func TestMappingDiscoveryExcludesRemovedNodesAndUnmappedDevices(t *testing.T) {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/cluster/mapping/pci", func(w http.ResponseWriter, _ *http.Request) {
+		respond(t, w, []map[string]any{
+			{"id": "gpu", "map": []string{"node=pve1,path=0000:01:00.0", "node=removed,path=0000:02:00.0"}},
+			{"id": "stale", "map": []string{"node=removed,path=0000:01:00.0"}},
+			{"id": "unmapped", "map": []string{}},
+		})
+	})
+	mux.HandleFunc("/cluster/mapping/usb", func(w http.ResponseWriter, _ *http.Request) {
+		respond(t, w, []map[string]any{
+			{"id": "usb", "map": []string{"node=pve2,id=1234:5678"}},
+			{"id": "old-usb", "map": []string{"node=removed,id=1234:5678"}},
+		})
+	})
+
+	server := httptest.NewServer(mux)
+	defer server.Close()
+
+	acc := newDiscoveryAccumulator(nil)
+	acc.nodesSet = map[string]struct{}{"pve1": {}, "pve2": {}}
+	acc.ensureNode("pve1")
+	acc.ensureNode("pve2")
+	acc.discoverClusterMappings(t.Context(), new(proxmox.Cluster).New(proxmox.NewClient(server.URL)), zap.NewNop())
+	opts := acc.buildOptions()
+	require.Equal(t, []string{"gpu"}, opts.PCIMappings)
+	require.Equal(t, []string{"usb"}, opts.USBMappings)
+	require.Equal(t, []string{"pve1"}, opts.NodeGroups["pci-gpu"])
+	require.NotContains(t, opts.NodeGroups, "pci-stale")
+	require.Empty(t, opts.TopologyForNodes([]string{"pve1"}).USBMappings)
+	require.Empty(t, opts.TopologyForNodes([]string{"pve2"}).PCIMappings)
+	require.Empty(t, opts.TopologyForNodes([]string{"removed"}).PCIMappings)
+	require.Equal(t, []string{"gpu"}, opts.TopologyForNodes([]string{"pve1", "pve2"}).PCIMappings)
+}
+
+func TestHardwarePlacementRequiresOneHostAndReportsAPIErrors(t *testing.T) {
+	for _, failure := range []string{"", "pci", "usb"} {
+		t.Run("failure="+failure, func(t *testing.T) {
+			mux := http.NewServeMux()
+			for _, kind := range []string{"pci", "usb"} {
+				mux.HandleFunc("/cluster/mapping/"+kind, func(w http.ResponseWriter, r *http.Request) {
+					require.Equal(t, http.MethodGet, r.Method)
+
+					if failure == kind {
+						http.Error(w, "permission denied", http.StatusForbidden)
+
+						return
+					}
+
+					node := "pve1"
+					if kind == "usb" {
+						node = "pve2"
+					}
+
+					respond(t, w, []map[string]any{{"id": kind, "map": []string{"node=" + node}}})
+				})
+			}
+
+			server := httptest.NewServer(mux)
+			defer server.Close()
+
+			p := NewProvisioner(proxmox.NewClient(server.URL))
+			nodes := proxmox.NodeStatuses{{Node: "pve1", Status: "online"}, {Node: "pve2", Status: "online"}}
+			selected, err := p.filterNodesByGroupAndTopology(t.Context(), zap.NewNop(), nodes, Data{
+				PCIDevices: []PCIDevice{{Mapping: "pci"}},
+				USBDevices: []USBDevice{{Mapping: "usb"}},
+			})
+			require.Empty(t, selected)
+
+			if failure == "" {
+				require.ErrorContains(t, err, "no node provides all requested PCI/USB mappings")
+			} else {
+				require.ErrorContains(t, err, "cannot read Proxmox "+strings.ToUpper(failure)+" resource mappings")
+			}
+		})
+	}
 }

@@ -12,7 +12,7 @@ import (
 	"slices"
 )
 
-// BuildUISchema retains every setting in both modes. Omni generates its own UI
+// BuildUISchema uses the same streamlined VM form in both modes. Omni generates its own UI
 // and does not support provider-supplied tabs or local draft persistence.
 // Flat property names keep existing pre-v4 Machine Classes editable without a
 // server-side migration or changes to the provisioned VMs.

@@ -64,7 +64,7 @@ func TestSchemaPreservesAuthoredOrderAndBasicFields(t *testing.T) {
 		require.NotContains(t, root, "x-omni-uischema")
 
 		// Structure is checked by the schema tests.
-		storage := props["disks"].(map[string]any)["items"].(map[string]any)["properties"].(map[string]any)["storage"].(map[string]any) //nolint:errcheck,forcetypeassert
+		storage := props["storage"].(map[string]any) //nolint:errcheck,forcetypeassert
 		require.Equal(t, "", storage["default"])
 	}
 }

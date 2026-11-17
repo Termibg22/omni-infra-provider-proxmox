@@ -43,7 +43,7 @@
         "integer",
         "null"
       ],
-      "title": "Cores (default: 2)",
+      "title": "Cores",
       "default": 2,
       "description": "CPU cores per socket. Omitted, blank or 0 uses 2. Existing saved values are shown directly.",
       "allOf": [
@@ -64,7 +64,7 @@
         "integer",
         "null"
       ],
-      "title": "Memory (MiB, default: 4096)",
+      "title": "Memory",
       "default": 4096,
       "description": "RAM in MiB. Omitted, blank or 0 uses 4096. Existing saved values are shown directly.",
       "allOf": [
@@ -91,8 +91,8 @@
         "integer",
         "null"
       ],
-      "description": "Primary boot disk size in GiB. Empty or 0 uses 20. The All Disks list, when populated, replaces this boot disk.",
-      "title": "Size (GiB, default: 20)",
+      "description": "Primary boot disk size in GiB. Empty or 0 uses 20.",
+      "title": "Size",
       "default": 20,
       "allOf": [
         {
@@ -111,18 +111,13 @@
       "type": "string",
       "title": "Storage",
       "default": "",
-      "description": "Destination for the boot disk. Leave empty to use the storage selector below, or choose an available VM disk storage automatically. Select the empty first row to clear this selection.",
+      "description": "Destination for the boot disk. Leave empty to select available VM disk storage automatically, or retain a previously saved storage rule. Select the empty first row to clear this selection.",
       "oneOf": [
         {
           "const": "",
           "title": " "
         }
       ]
-    },
-    "storage_selector": {
-      "type": "string",
-      "description": "Optional CEL expression or storage name used when Storage is empty. For example: name == \"local-zfs\".",
-      "title": "Storage Selector (CEL)"
     },
     "disk_ssd": {
       "type": "boolean",
@@ -231,7 +226,7 @@
     },
     "_section_extra_devices": {
       "type": "object",
-      "title": "Additional Devices and Overrides",
+      "title": "Additional Devices",
       "readOnly": true,
       "properties": {}
     },
@@ -246,7 +241,7 @@
               "integer",
               "null"
             ],
-            "description": "Disk size in GB",
+            "description": "Additional disk size in GiB. Empty or 0 uses 20.",
             "allOf": [
               {
                 "anyOf": [
@@ -258,11 +253,8 @@
                   }
                 ]
               }
-            ]
-          },
-          "storage_selector": {
-            "type": "string",
-            "description": "Optional CEL expression. Used when Storage is empty; if both are empty, inherit the boot disk storage selection."
+            ],
+            "title": "Size"
           },
           "disk_ssd": {
             "type": "boolean",
@@ -332,7 +324,7 @@
             "type": "string",
             "title": "Storage",
             "default": "",
-            "description": "VM-disk-capable Proxmox storage pool (empty selects an available VM disk storage). Select the empty first row to clear this selection.",
+            "description": "Destination for this disk. Leave empty to inherit the boot disk storage selection. Select the empty first row to clear this selection.",
             "oneOf": [
               {
                 "const": "",
@@ -480,435 +472,6 @@
         ]
       },
       "title": "Additional NICs"
-    },
-    "disks": {
-      "type": "array",
-      "title": "All Disks (override boot disk)",
-      "description": "Optional complete disk configuration for per-disk bus, QoS and Talos volume settings. The FIRST entry replaces the boot disk above. Extra entries are data disks. Additional Disks are appended afterwards.",
-      "items": {
-        "type": "object",
-        "title": "Hard Disk",
-        "properties": {
-          "storage": {
-            "type": "string",
-            "title": "Storage",
-            "default": "",
-            "description": "VM-disk-capable Proxmox storage pool (empty selects an available VM disk storage). Select the empty first row to clear this selection.",
-            "oneOf": [
-              {
-                "const": "",
-                "title": " "
-              }
-            ]
-          },
-          "size": {
-            "type": [
-              "integer",
-              "null"
-            ],
-            "title": "Disk Size (GB)",
-            "default": 20,
-            "description": "Disk size in GB",
-            "allOf": [
-              {
-                "anyOf": [
-                  {
-                    "const": 0
-                  },
-                  {
-                    "minimum": 1
-                  }
-                ]
-              }
-            ]
-          },
-          "bus": {
-            "type": "string",
-            "title": "Bus / Device",
-            "default": "scsi",
-            "description": "Disk controller bus. Select the empty first row to clear this selection.",
-            "oneOf": [
-              {
-                "const": "",
-                "title": " "
-              },
-              {
-                "const": "scsi",
-                "title": "scsi"
-              },
-              {
-                "const": "virtio",
-                "title": "virtio"
-              },
-              {
-                "const": "sata",
-                "title": "sata"
-              }
-            ]
-          },
-          "cache": {
-            "type": "string",
-            "title": "Cache",
-            "default": "none",
-            "description": "Disk cache mode. Select the empty first row to clear this selection.",
-            "oneOf": [
-              {
-                "const": "",
-                "title": " "
-              },
-              {
-                "const": "none",
-                "title": "none"
-              },
-              {
-                "const": "writethrough",
-                "title": "writethrough"
-              },
-              {
-                "const": "writeback",
-                "title": "writeback"
-              },
-              {
-                "const": "directsync",
-                "title": "directsync"
-              },
-              {
-                "const": "unsafe",
-                "title": "unsafe"
-              }
-            ]
-          },
-          "aio": {
-            "type": "string",
-            "title": "Async IO",
-            "default": "io_uring",
-            "description": "Async IO mode. Select the empty first row to clear this selection.",
-            "oneOf": [
-              {
-                "const": "",
-                "title": " "
-              },
-              {
-                "const": "io_uring",
-                "title": "io_uring"
-              },
-              {
-                "const": "native",
-                "title": "native"
-              },
-              {
-                "const": "threads",
-                "title": "threads"
-              }
-            ]
-          },
-          "ssd": {
-            "type": "boolean",
-            "title": "SSD Emulation",
-            "default": true,
-            "description": "Enable SSD emulation (ssd=1)"
-          },
-          "discard": {
-            "type": "boolean",
-            "title": "Discard (TRIM)",
-            "default": true,
-            "description": "Enable TRIM/discard"
-          },
-          "iothread": {
-            "type": "boolean",
-            "title": "IO Thread",
-            "default": true,
-            "description": "Enable dedicated IO thread"
-          },
-          "backup": {
-            "type": "boolean",
-            "title": "Backup",
-            "default": true,
-            "description": "Include disk in Proxmox backups"
-          },
-          "replicate": {
-            "type": "boolean",
-            "title": "Include in Replication",
-            "default": true,
-            "description": "Include disk in Proxmox storage replication"
-          },
-          "volume_name": {
-            "type": "string",
-            "title": "Talos Volume Name (Auto-Mount)",
-            "description": "Optional name for data disks: auto-generates a Talos UserVolumeConfig mounted at /var/mnt/<volume_name>."
-          },
-          "iops_read": {
-            "type": [
-              "integer",
-              "null"
-            ],
-            "title": "Read Limit (IOPS)",
-            "allOf": [
-              {
-                "minimum": 0
-              }
-            ]
-          },
-          "iops_write": {
-            "type": [
-              "integer",
-              "null"
-            ],
-            "title": "Write Limit (IOPS)",
-            "allOf": [
-              {
-                "minimum": 0
-              }
-            ]
-          },
-          "mbps_read": {
-            "type": [
-              "number",
-              "null"
-            ],
-            "title": "Read Limit (MB/s)",
-            "allOf": [
-              {
-                "minimum": 0
-              }
-            ]
-          },
-          "mbps_write": {
-            "type": [
-              "number",
-              "null"
-            ],
-            "title": "Write Limit (MB/s)",
-            "allOf": [
-              {
-                "minimum": 0
-              }
-            ]
-          },
-          "storage_selector": {
-            "type": "string",
-            "title": "Storage Selector (CEL)",
-            "description": "Preserves an existing CEL storage selection. Used only when Storage is empty."
-          }
-        },
-        "required": [
-          "size"
-        ]
-      }
-    },
-    "nics": {
-      "type": "array",
-      "title": "All NICs (override primary NIC)",
-      "description": "Optional complete NIC configuration for addresses, routing, MTU and queues. The FIRST entry replaces the primary NIC above. Additional NICs are appended afterwards.",
-      "items": {
-        "type": "object",
-        "title": "Network Device",
-        "properties": {
-          "bridge": {
-            "type": "string",
-            "title": "Bridge / SDN VNet",
-            "default": "vmbr0",
-            "description": "Proxmox bridge or SDN VNet"
-          },
-          "model": {
-            "type": "string",
-            "title": "Model",
-            "default": "virtio",
-            "oneOf": [
-              {
-                "const": "",
-                "title": " "
-              },
-              {
-                "const": "virtio",
-                "title": "virtio"
-              },
-              {
-                "const": "e1000",
-                "title": "e1000"
-              },
-              {
-                "const": "e1000e",
-                "title": "e1000e"
-              },
-              {
-                "const": "vmxnet3",
-                "title": "vmxnet3"
-              },
-              {
-                "const": "rtl8139",
-                "title": "rtl8139"
-              }
-            ],
-            "description": "Select the empty first row to clear this selection."
-          },
-          "vlan": {
-            "type": [
-              "integer",
-              "null"
-            ],
-            "title": "VLAN Tag",
-            "default": 0,
-            "allOf": [
-              {
-                "minimum": 0,
-                "maximum": 4094
-              }
-            ]
-          },
-          "firewall": {
-            "type": "boolean",
-            "title": "Firewall",
-            "default": true
-          },
-          "mtu": {
-            "type": [
-              "integer",
-              "null"
-            ],
-            "title": "MTU",
-            "allOf": [
-              {
-                "anyOf": [
-                  {
-                    "const": 0
-                  },
-                  {
-                    "minimum": 1,
-                    "maximum": 65520
-                  }
-                ]
-              }
-            ]
-          },
-          "queues": {
-            "type": [
-              "integer",
-              "null"
-            ],
-            "title": "Multiqueue",
-            "allOf": [
-              {
-                "anyOf": [
-                  {
-                    "const": 0
-                  },
-                  {
-                    "minimum": 1,
-                    "maximum": 64
-                  }
-                ]
-              }
-            ]
-          },
-          "rate_limit": {
-            "type": [
-              "number",
-              "null"
-            ],
-            "title": "Rate Limit (MB/s)",
-            "allOf": [
-              {
-                "minimum": 0
-              }
-            ]
-          },
-          "mac_address": {
-            "type": "string",
-            "title": "MAC Address"
-          },
-          "trunks": {
-            "type": "string",
-            "title": "VLAN Trunks"
-          },
-          "dhcp4": {
-            "type": "boolean",
-            "title": "DHCPv4"
-          },
-          "dhcp6": {
-            "type": "boolean",
-            "title": "DHCPv6",
-            "default": false
-          },
-          "ip_pool": {
-            "type": "string",
-            "title": "Static IP Pool (Auto-Assign)",
-            "description": "CIDR range (e.g. '192.168.1.100-192.168.1.150/24') to auto-assign unique IPs per VM."
-          },
-          "addresses": {
-            "type": "array",
-            "title": "Static IP Addresses (CIDR)",
-            "items": {
-              "type": "string",
-              "minLength": 3
-            }
-          },
-          "gateway4": {
-            "type": "string",
-            "title": "IPv4 Gateway"
-          },
-          "gateway6": {
-            "type": "string",
-            "title": "IPv6 Gateway"
-          },
-          "nameservers": {
-            "type": "array",
-            "title": "DNS Servers",
-            "items": {
-              "type": "string"
-            }
-          },
-          "search_domains": {
-            "type": "array",
-            "title": "DNS Search Domains",
-            "items": {
-              "type": "string"
-            }
-          },
-          "routes": {
-            "type": "array",
-            "title": "Static Routes",
-            "items": {
-              "type": "object",
-              "title": "Route",
-              "properties": {
-                "to": {
-                  "type": "string",
-                  "title": "Destination (CIDR)"
-                },
-                "via": {
-                  "type": "string",
-                  "title": "Gateway (Via)"
-                },
-                "metric": {
-                  "type": [
-                    "integer",
-                    "null"
-                  ],
-                  "title": "Metric",
-                  "allOf": [
-                    {
-                      "minimum": 0
-                    }
-                  ]
-                },
-                "on_link": {
-                  "type": "boolean",
-                  "title": "On-Link",
-                  "default": false
-                }
-              },
-              "required": [
-                "to",
-                "via"
-              ]
-            }
-          }
-        },
-        "required": [
-          "bridge"
-        ]
-      }
     },
     "_section_compute": {
       "type": "object",
@@ -1604,184 +1167,12 @@
         }
       }
     },
-    "replication": {
-      "type": "object",
-      "title": "Storage Replication (ZFS)",
-      "description": "Automatic ZFS storage replication across cluster nodes.",
-      "properties": {
-        "enabled": {
-          "type": "boolean",
-          "title": "Enable Replication",
-          "default": false
-        },
-        "schedule": {
-          "type": "string",
-          "title": "Schedule",
-          "default": "*/15"
-        },
-        "target_node": {
-          "type": "string",
-          "title": "Target Node",
-          "default": "",
-          "oneOf": [
-            {
-              "const": "",
-              "title": " "
-            }
-          ],
-          "description": "Select the empty first row to clear this selection."
-        },
-        "rate_limit": {
-          "type": [
-            "number",
-            "null"
-          ],
-          "title": "Rate Limit (MB/s)",
-          "allOf": [
-            {
-              "minimum": 0
-            }
-          ]
-        }
-      }
-    },
     "security_groups": {
       "type": "array",
       "title": "Security Groups",
       "items": {
         "type": "string",
         "minLength": 1
-      }
-    },
-    "firewall_options": {
-      "type": "object",
-      "title": "VM Firewall Options",
-      "properties": {
-        "enable": {
-          "type": "boolean",
-          "title": "Enable Firewall",
-          "default": false
-        },
-        "policy_in": {
-          "type": "string",
-          "title": "Inbound Policy",
-          "default": "ACCEPT",
-          "oneOf": [
-            {
-              "const": "",
-              "title": " "
-            },
-            {
-              "const": "ACCEPT",
-              "title": "ACCEPT"
-            },
-            {
-              "const": "DROP",
-              "title": "DROP"
-            },
-            {
-              "const": "REJECT",
-              "title": "REJECT"
-            }
-          ],
-          "description": "Select the empty first row to clear this selection."
-        },
-        "policy_out": {
-          "type": "string",
-          "title": "Outbound Policy",
-          "default": "ACCEPT",
-          "oneOf": [
-            {
-              "const": "",
-              "title": " "
-            },
-            {
-              "const": "ACCEPT",
-              "title": "ACCEPT"
-            },
-            {
-              "const": "DROP",
-              "title": "DROP"
-            },
-            {
-              "const": "REJECT",
-              "title": "REJECT"
-            }
-          ],
-          "description": "Select the empty first row to clear this selection."
-        },
-        "dhcp": {
-          "type": "boolean",
-          "title": "Allow DHCP",
-          "default": true
-        },
-        "macfilter": {
-          "type": "boolean",
-          "title": "MAC Filter",
-          "default": true
-        },
-        "ipfilter": {
-          "type": "boolean",
-          "title": "IP Filter",
-          "default": false
-        },
-        "ndp": {
-          "type": "boolean",
-          "title": "Allow IPv6 NDP",
-          "default": true
-        },
-        "radv": {
-          "type": "boolean",
-          "title": "Allow Router Advertisements",
-          "default": false
-        },
-        "log_level_in": {
-          "type": "string",
-          "title": "Inbound Log Level",
-          "description": "Optional Proxmox inbound firewall log level. Select the empty first row to clear this selection.",
-          "oneOf": [
-            {
-              "const": "",
-              "title": " "
-            },
-            {
-              "const": "nolog",
-              "title": "nolog"
-            },
-            {
-              "const": "emerg",
-              "title": "emerg"
-            },
-            {
-              "const": "alert",
-              "title": "alert"
-            },
-            {
-              "const": "crit",
-              "title": "crit"
-            },
-            {
-              "const": "err",
-              "title": "err"
-            },
-            {
-              "const": "warning",
-              "title": "warning"
-            },
-            {
-              "const": "notice",
-              "title": "notice"
-            },
-            {
-              "const": "info",
-              "title": "info"
-            },
-            {
-              "const": "debug",
-              "title": "debug"
-            }
-          ]
-        }
       }
     },
     "pci_devices": {
@@ -1795,7 +1186,14 @@
             "type": "string",
             "title": "PCI Mapping",
             "minLength": 1,
-            "description": "A mapping is required for each device. Clear the selection to choose another mapping, or remove this device if it is no longer needed."
+            "description": "A mapping is required for each device. Clear the selection to choose another mapping, or remove this device if it is no longer needed.",
+            "default": "",
+            "oneOf": [
+              {
+                "const": "",
+                "title": " "
+              }
+            ]
           },
           "mdev": {
             "type": "string",
@@ -1834,7 +1232,14 @@
             "type": "string",
             "title": "USB Mapping",
             "minLength": 1,
-            "description": "A mapping is required for each device. Clear the selection to choose another mapping, or remove this device if it is no longer needed."
+            "description": "A mapping is required for each device. Clear the selection to choose another mapping, or remove this device if it is no longer needed.",
+            "default": "",
+            "oneOf": [
+              {
+                "const": "",
+                "title": " "
+              }
+            ]
           },
           "usb3": {
             "type": "boolean",

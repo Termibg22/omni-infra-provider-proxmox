@@ -1,6 +1,20 @@
-# Correcciones del editor e inventario: 4.1.3
+# Correcciones del editor e inventario: 4.1.4
 
 La solución modifica exclusivamente el proveedor. No incluye parches, extensiones de navegador ni cambios al Omni alojado.
+
+## Cambios de 4.1.4
+
+- Storage sustituye a Storage Selector (CEL) en el formulario del disco principal y de los discos adicionales.
+- Se retiran All Disks, All NICs, VM Firewall Options y Storage Replication (ZFS). El backend sigue aceptando esas configuraciones guardadas; no se borran al abrir o guardar el formulario.
+- Cores, Memory y Size llevan títulos cortos. Las unidades y valores predeterminados permanecen en las ayudas.
+- PCI Mapping y USB Mapping son selectores vaciables con mappings asociados a nodos actuales. Se descartan mappings sin nodo válido, incluidos los que solo apuntan a nodos eliminados. Añadir un dispositivo no preselecciona hardware.
+- La ayuda indica en qué nodos está definido cada mapping. Si no se descubren mappings, explica dónde configurarlos y cómo actualizar el inventario.
+- El esquema valida Target Node, Node Group y la existencia de un nodo compatible con todos los dispositivos a la vez. Dos mappings que existen en nodos distintos sin ningún host común no forman una combinación válida.
+- Los errores al consultar mappings ya no se ocultan detrás de un genérico «no hay nodos»: aparecen en los logs de descubrimiento y en los errores de aprovisionamiento.
+
+El editor actual de Omni no vuelve a calcular las opciones de un selector a partir de otro campo. La lista visible sigue siendo global, y las condiciones validan la combinación; no se presenta como implementado el filtrado visual dependiente. Se ha comprobado que cambiar Target Node conserva los dispositivos elegidos, incluso si ahora son incompatibles, para que el usuario pueda corregirlos sin perderlos.
+
+Una clase antigua que use `disks`/`nics` conserva esos overrides y debe editarse mediante YAML. Un CEL antiguo sigue aplicándose cuando Storage está vacío; elegir Storage explícitamente lo sustituye para ese disco. No se migran ni reescriben clases reales automáticamente.
 
 ## Cambios de 4.1.3
 
@@ -14,7 +28,7 @@ La solución modifica exclusivamente el proveedor. No incluye parches, extension
 
 ## Límites comprobados del Omni alojado
 
-El editor original usa grupos estáticos para objetos. No expone un acordeón desde el esquema del proveedor. El selector de variantes que sí incluye JSONForms reinicializa datos al cambiar de variante, por lo que no sirve para plegar una sección conservando sus ajustes. VM Firewall Options permanece visible.
+El editor original usa grupos estáticos para objetos. No expone un acordeón desde el esquema del proveedor. El selector de variantes que sí incluye JSONForms reinicializa datos al cambiar de variante, por lo que no sirve para plegar una sección conservando sus ajustes. En 4.1.4 se ha retirado VM Firewall Options del formulario.
 
 En la sesión real se observaron errores de red simultáneos en los streams de MachineClasses, InfraProviderStatuses, métricas y notificaciones. El código original de Omni vuelve a asignar el formulario al recibir otra vez el recurso MachineClass tras reconectar. El proveedor no controla esa conexión navegador-SaaS. La eliminación de su temporizador quita publicaciones periódicas de esquema, pero no arregla por sí sola esas reconexiones ni una recarga manual. No se presenta como resuelta esa pérdida de borradores.
 
@@ -25,7 +39,7 @@ Las listas nuevas sustituyen `auto` por la selección vacía. El backend sigue a
 - `/nodes` determina la pertenencia actual; referencias antiguas en grupos, HA, mappings o almacenamiento no añaden nodos.
 - Solo almacenamiento activo, habilitado y con `images` admite discos de VM; `rootdir` por sí solo no es suficiente. Se valida también al aprovisionar.
 - Los controles de CPU, RAM, disco y NIC usan sus campos planos guardados. Los límites numéricos están dentro de subesquemas para evitar el NaN que genera el renderizador de Omni al abrir un número omitido.
-- Permanecen disponibles firmware, CPU, QoS, IPs, DNS, HA, replicación, firewall, PCI/USB y templates.
+- El backend mantiene firmware, CPU, QoS, IPs, DNS, HA, replicación, firewall, PCI/USB y templates. Las opciones retiradas de la interfaz en 4.1.4 siguen disponibles por YAML.
 
 El YAML agrupado de v4 sigue siendo válido en el backend, pero sus valores solo agrupados no aparecen en los controles planos; para esas clases debe editarse el manifiesto con `omnictl`.
 
@@ -34,13 +48,13 @@ El YAML agrupado de v4 sigue siendo válido en el backend, pero sus valores solo
 - Pruebas Go de inventario con un nodo eliminado aún presente en recursos agregados, almacenamiento, grupos y mapeos.
 - API simulada con un destino válido, uno `rootdir`, uno deshabilitado y otro inactivo.
 - Detector de carreras, `go vet`, lint completo y compilación Linux amd64/arm64.
-- Cinco pruebas de compatibilidad con el renderizador original de Omni v1.13.3, commit `1834114db70c2bbfff71cd4ba8a1882a01504193`, sin modificar sus componentes: valores antiguos visibles e intactos, formulario nuevo sin NaN/null ni dispositivos reemplazados, edición conservada durante actualización del esquema, selección/vaciado/reapertura usando el selector real de Omni, y validación del esquema al vaciar selectores o añadir discos sin CEL.
+- Siete pruebas de compatibilidad con el renderizador original de Omni v1.13.3, commit `1834114db70c2bbfff71cd4ba8a1882a01504193`, sin modificar sus componentes: datos antiguos conservados, formulario nuevo sin NaN, edición durante actualización de esquema, selectores vaciables, campos eliminados y títulos cortos, opciones PCI/USB reales y validación de combinaciones de nodo/grupo/mappings.
 - Prueba visual local usando ese editor original y datos sintéticos; no se modificó ninguna clase ni VM real.
 
-Para repetir las pruebas de interoperabilidad, en un checkout de Omni de esa revisión con sus dependencias de frontend instaladas, copiar `hack/test/omni-ui/provider-schema.spec.ts` a `frontend/src/components/Form/ProviderSchema.spec.ts` y ejecutar desde `frontend`:
+Para repetir las pruebas, generar desde la raíz del proveedor un esquema sintético con `go run hack/test/omni-ui/schema_fixture.go > /tmp/provider-schema.json`. En un checkout de Omni de esa revisión con sus dependencias de frontend instaladas, copiar `hack/test/omni-ui/provider-schema.spec.ts` a `frontend/src/components/Form/ProviderSchema.spec.ts` y ejecutar desde `frontend`:
 
 ```sh
-PROXMOX_PROVIDER_SCHEMA=/ruta/absoluta/al/provider/cmd/omni-infra-provider-proxmox/data/schema.json \
+PROXMOX_PROVIDER_SCHEMA=/tmp/provider-schema.json \
   npm test -- --run src/components/Form/ProviderSchema.spec.ts
 ```
 

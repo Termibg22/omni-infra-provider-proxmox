@@ -823,12 +823,12 @@ func TestDiscoverClusterOptionsAgainstMockProxmox(t *testing.T) {
 	})
 	mux.HandleFunc("/cluster/mapping/pci", func(w http.ResponseWriter, _ *http.Request) {
 		writeJSON(w, []map[string]any{
-			{"id": "gpu-rtx4090"},
+			{"id": "gpu-rtx4090", "map": []string{"node=pve1,path=0000:01:00.0,id=10de:2684"}},
 		})
 	})
 	mux.HandleFunc("/cluster/mapping/usb", func(w http.ResponseWriter, _ *http.Request) {
 		writeJSON(w, []map[string]any{
-			{"id": "ups-usb"},
+			{"id": "ups-usb", "map": []string{"node=pve1,id=051d:0002"}},
 		})
 	})
 	mux.HandleFunc("/cluster/qemu/custom-cpu-models", func(w http.ResponseWriter, _ *http.Request) {

@@ -33,11 +33,11 @@ Despite its historical name, `OMNI_SERVICE_ACCOUNT_KEY` must contain an **infras
 docker run -d --name omni-proxmox --restart unless-stopped \
   --mount type=bind,source="$(pwd)/config.yaml",target=/config.yaml,readonly \
   -e OMNI_ENDPOINT -e OMNI_SERVICE_ACCOUNT_KEY \
-  ghcr.io/termibg22/omni-infra-provider-proxmox:v4.1.3 \
+  ghcr.io/termibg22/omni-infra-provider-proxmox:v4.1.4 \
   --config-file /config.yaml
 ```
 
-`v4.1.3` simplifies the form, adds empty choices for clearing selectors, and stops periodic schema updates. It works with unmodified Omni.
+`v4.1.4` simplifies storage and device controls and validates PCI/USB mappings against node placement. It works with unmodified Omni.
 Do not use `latest` to pin a production deployment.
 
 ## Create a Machine Class
@@ -47,7 +47,7 @@ For ordinary DHCP machines, the provider defaults to 2 cores, 4096 MB RAM, a 20 
 Select a storage and bridge that exist on every eligible target node, or constrain placement with a node/group.
 
 The form uses flat fields so previously saved CPU, memory, boot disk and primary NIC values remain visible.
-For a normal VM, use the boot disk and primary network controls. Empty complete-device lists retain those devices.
+For a normal VM, use Boot Disk and Primary NIC. Additional Disks and Additional NICs append devices.
 Grouped v4 YAML remains accepted by the provider, but the flat form cannot display values stored only inside those old groups; edit such manifests with `omnictl`.
 
 ```yaml
@@ -58,7 +58,7 @@ storage: local-zfs
 network_bridge: vmbr0
 ```
 
-For per-device tuning, the optional `disks` and `nics` arrays replace the boot disk and primary NIC controls:
+For YAML-only per-device tuning, `disks` and `nics` arrays replace the boot disk and primary NIC controls. These arrays are no longer shown in the form; edit classes that use them with `omnictl`:
 
 ```yaml
 cores: 4
@@ -89,21 +89,22 @@ spec:
     provider_data: |
       cores: 4
       memory: 8192
-      disks:
-        - storage: local-lvm
-          size: 40
+      disk_size: 40
+      storage: local-zfs
+      network_bridge: vmbr0
 ```
 
 Apply it with `omnictl apply -f machine-class.yaml`, then select the class when configuring a cluster's machine sets.
 
-## Form compatibility and updates (v4.1.3)
+## Form compatibility and updates (v4.1.4)
 
-All advanced settings are exposed in both schema modes. `--schema-mode` remains accepted for compatibility.
+Both schema modes show the same streamlined VM form. `--schema-mode` remains accepted for compatibility.
 The hosted Omni renderer generates its own layout and ignores provider-supplied tabs and JSON Schema defaults.
-Boot Disk and Primary NIC have separate headings. All device fields retain their saved names and values.
+Boot Disk and Primary NIC have separate headings. Cores, Memory and Size use short labels; units and defaults are in their help text.
 Every dropdown offers an empty first row to clear a selection; `auto` is no longer a visible option.
-Workload profiles and network bonds have been removed from the form. Existing YAML using those fields remains supported to avoid changing previously provisioned configurations.
-The current Omni renderer cannot collapse provider-defined sections such as VM Firewall Options; they remain visible.
+Workload profiles, network bonds, CEL storage expressions, complete-device overrides, VM Firewall Options and ZFS Storage Replication are no longer shown in the form. Existing YAML using these fields remains supported.
+Storage is the only storage selector in the form. Choosing it takes precedence over a previously saved CEL rule; leaving it empty preserves that rule when one exists.
+The current Omni renderer cannot collapse provider-defined sections.
 Blank placement fields mean `auto`; omitted or zero CPU/RAM values use 2 cores and 4096 MiB. Saved nonzero values are displayed directly.
 Numeric limits live in validation subschemas to avoid Omni 1.13.3 converting missing values to NaN/null on mount.
 
@@ -111,7 +112,9 @@ Node choices come from the current `/nodes` inventory. Disk destinations require
 A `rootdir`-only storage supports containers, not VM disks, and is excluded. Stale references in config, HA or mappings do not create selectable nodes.
 Dropdown choices are discovered and published once when the provider starts. Restart it to reflect topology changes; actual provisioning still checks current nodes and storage.
 The periodic schema publisher has been removed, including when an older deployment still passes `--schema-refresh-interval`.
-Choices describe the cluster as a whole; constrain placement when a resource is available on only some nodes.
+PCI/USB choices contain resource mappings associated with current nodes, with compatible nodes listed in the field help. Hardware is never preselected when adding a device.
+Omni does not filter the visible choices when Target Node or Node Group changes. Conditional schema validation checks that the selected placement can provide every requested device on one common node; provisioning checks the current Proxmox API again.
+Empty mapping lists can mean no mappings exist or the token cannot see them. Configure them in Proxmox Datacenter > Resource Mappings and grant the appropriate mapping permissions; see the [PCI API](https://github.com/proxmox/pve-manager/blob/master/PVE/API2/Cluster/Mapping/PCI.pm) and [USB API](https://github.com/proxmox/pve-manager/blob/master/PVE/API2/Cluster/Mapping/USB.pm). Restart the provider after changing the inventory or permissions.
 
 Browser reloads and watch reconnections can discard unsaved changes in hosted Omni. The original Machine Class editor reloads its form when the watched class arrives again.
 Simultaneous network errors were observed across class, metrics, notification and provider streams; removing provider schema polling cannot prevent these independent SaaS/browser connection resets.
@@ -120,7 +123,7 @@ See [EDITOR_FIXES.md](EDITOR_FIXES.md) for the issue-by-issue scope and verifica
 
 | Flag | Default | Purpose |
 | --- | --- | --- |
-| `--schema-mode` | `basic` | Compatibility flag; both values expose all settings |
+| `--schema-mode` | `basic` | Compatibility flag; both values show the same form |
 | `--schema-refresh-interval` | `0` | Accepted for old deployments; ignored. Schema is published only at startup |
 | `--machineset-sync-interval` | `0` | Opt in to existing-VM updates, for example `30s` |
 | `--id` | `proxmox` | Infrastructure provider ID |

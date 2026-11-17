@@ -1,3 +1,13 @@
+## [Omni Infra Provider Proxmox 4.1.4](https://github.com/Termibg22/omni-infra-provider-proxmox/tree/v4.1.4)
+
+- Replace visible CEL storage expressions with the Storage selector; retain compatibility with saved YAML.
+- Remove complete disk/NIC overrides, VM Firewall Options and Storage Replication from the form.
+- Shorten Cores, Memory and Size labels; keep units and defaults in field help.
+- Offer PCI/USB mappings associated with current nodes, show node availability in help, and avoid preselecting hardware.
+- Validate target node, node group and common-host compatibility for all selected mappings; stock Omni still shows a global list of choices.
+- Report mapping API errors and reject mappings associated only with removed nodes.
+- Add reproducible synthetic-cluster tests using the original Omni renderer.
+
 ## [Omni Infra Provider Proxmox 4.1.3](https://github.com/Termibg22/omni-infra-provider-proxmox/tree/v4.1.3)
 
 - Remove workload profiles, network bonds and "legacy format" labels from the form; retain compatibility with previously saved YAML.

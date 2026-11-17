@@ -102,20 +102,12 @@ func (o ClusterOptions) TopologyForNodes(nodeNames []string) NodeTopology {
 	}
 
 	return NodeTopology{
-		DiskStorages:   nonEmptyOrFallback(slices.Sorted(maps.Keys(diskSet)), o.DiskStorages),
-		ISOStorages:    nonEmptyOrFallback(slices.Sorted(maps.Keys(isoSet)), o.ISOStorages),
-		NetworkBridges: nonEmptyOrFallback(slices.Sorted(maps.Keys(bridgeSet)), o.NetworkBridges),
-		PCIMappings:    nonEmptyOrFallback(slices.Sorted(maps.Keys(pciSet)), o.PCIMappings),
-		USBMappings:    nonEmptyOrFallback(slices.Sorted(maps.Keys(usbSet)), o.USBMappings),
+		DiskStorages:   slices.Sorted(maps.Keys(diskSet)),
+		ISOStorages:    slices.Sorted(maps.Keys(isoSet)),
+		NetworkBridges: slices.Sorted(maps.Keys(bridgeSet)),
+		PCIMappings:    slices.Sorted(maps.Keys(pciSet)),
+		USBMappings:    slices.Sorted(maps.Keys(usbSet)),
 	}
-}
-
-func nonEmptyOrFallback(vals, fallback []string) []string {
-	if len(vals) > 0 {
-		return vals
-	}
-
-	return fallback
 }
 
 type nodeTopologySets struct {
@@ -244,15 +236,17 @@ func DiscoverClusterOptions(ctx context.Context, px *proxmox.Client, logger *zap
 	acc.discoverFromClusterResources(ctx, cluster)
 	acc.discoverClusterStoragesAndPools(ctx, px, logger)
 	acc.discoverFromNodes(ctx, px, logger)
-	acc.discoverClusterMappingsAndModels(ctx, cluster)
+	acc.discoverClusterMappingsAndModels(ctx, cluster, logger)
 
 	opts := acc.buildOptions()
 	if !opts.DiscoveryComplete {
 		opts.Nodes = nil
 		opts.NodeGroups = nil
-		opts.NodeTopologies = nil
 		opts.DiskStorages = nil
 		opts.ISOStorages = nil
+		opts.NodeTopologies = nil
+		opts.PCIMappings = nil
+		opts.USBMappings = nil
 	}
 
 	logger.Info("discovered Proxmox cluster options for UI schema",
@@ -482,9 +476,9 @@ func (a *discoveryAccumulator) discoverSingleNode(ctx context.Context, node *pro
 	return complete
 }
 
-func (a *discoveryAccumulator) discoverClusterMappingsAndModels(ctx context.Context, cluster *proxmox.Cluster) {
+func (a *discoveryAccumulator) discoverClusterMappingsAndModels(ctx context.Context, cluster *proxmox.Cluster, logger *zap.Logger) {
 	a.discoverSDNAndFirewall(ctx, cluster)
-	a.discoverClusterMappings(ctx, cluster)
+	a.discoverClusterMappings(ctx, cluster, logger)
 	a.discoverClusterModelsAndRules(ctx, cluster)
 }
 
@@ -540,14 +534,16 @@ func (a *discoveryAccumulator) recordSDNVNet(vnet *proxmox.VNet) {
 	}
 }
 
-func (a *discoveryAccumulator) discoverClusterMappings(ctx context.Context, cluster *proxmox.Cluster) {
-	a.discoverPCIMappings(ctx, cluster)
-	a.discoverUSBMappings(ctx, cluster)
+func (a *discoveryAccumulator) discoverClusterMappings(ctx context.Context, cluster *proxmox.Cluster, logger *zap.Logger) {
+	a.discoverPCIMappings(ctx, cluster, logger)
+	a.discoverUSBMappings(ctx, cluster, logger)
 }
 
-func (a *discoveryAccumulator) discoverPCIMappings(ctx context.Context, cluster *proxmox.Cluster) {
+func (a *discoveryAccumulator) discoverPCIMappings(ctx context.Context, cluster *proxmox.Cluster, logger *zap.Logger) {
 	pciMappings, err := cluster.PCIMappings(ctx, "")
 	if err != nil {
+		logger.Warn("cannot discover PCI mappings; check Proxmox resource mapping permissions", zap.Error(err))
+
 		return
 	}
 
@@ -556,8 +552,7 @@ func (a *discoveryAccumulator) discoverPCIMappings(ctx context.Context, cluster 
 			continue
 		}
 
-		a.pciSet[m.ID] = struct{}{}
-		mappedNodes := extractNodesFromMappingEntries(m.Map)
+		mappedNodes := a.currentMappingNodes(m.Map)
 
 		for _, n := range mappedNodes {
 			if nt := a.ensureNode(n); nt != nil {
@@ -566,14 +561,17 @@ func (a *discoveryAccumulator) discoverPCIMappings(ctx context.Context, cluster 
 		}
 
 		if len(mappedNodes) > 0 {
+			a.pciSet[m.ID] = struct{}{}
 			a.addNodeGroup("pci-"+m.ID, mappedNodes)
 		}
 	}
 }
 
-func (a *discoveryAccumulator) discoverUSBMappings(ctx context.Context, cluster *proxmox.Cluster) {
+func (a *discoveryAccumulator) discoverUSBMappings(ctx context.Context, cluster *proxmox.Cluster, logger *zap.Logger) {
 	usbMappings, err := cluster.USBMappings(ctx, "")
 	if err != nil {
+		logger.Warn("cannot discover USB mappings; check Proxmox resource mapping permissions", zap.Error(err))
+
 		return
 	}
 
@@ -582,14 +580,21 @@ func (a *discoveryAccumulator) discoverUSBMappings(ctx context.Context, cluster 
 			continue
 		}
 
-		a.usbSet[m.ID] = struct{}{}
-
-		for _, n := range extractNodesFromMappingEntries(m.Map) {
+		for _, n := range a.currentMappingNodes(m.Map) {
 			if nt := a.ensureNode(n); nt != nil {
+				a.usbSet[m.ID] = struct{}{}
 				nt.usbMappings[m.ID] = struct{}{}
 			}
 		}
 	}
+}
+
+func (a *discoveryAccumulator) currentMappingNodes(entries []string) []string {
+	return slices.DeleteFunc(extractNodesFromMappingEntries(entries), func(node string) bool {
+		_, current := a.nodesSet[node]
+
+		return !current
+	})
 }
 
 func extractNodesFromMappingEntries(entries []string) []string {
@@ -741,9 +746,11 @@ func BuildDynamicSchema(baseSchema string, opts ClusterOptions) (string, error) 
 
 	// 10. Hardware Passthrough
 	if ptProps := sectionOrRoot(props, "passthrough"); ptProps != nil {
-		setArrayObjectPropertyEnum(ptProps, "pci_devices", "mapping", opts.PCIMappings, firstOrEmpty(opts.PCIMappings))
-		setArrayObjectPropertyEnum(ptProps, "usb_devices", "mapping", opts.USBMappings, firstOrEmpty(opts.USBMappings))
+		setHardwareMappingOptions(ptProps, "pci_devices", opts.PCIMappings, opts)
+		setHardwareMappingOptions(ptProps, "usb_devices", opts.USBMappings, opts)
 	}
+
+	addHardwareTopologyConstraints(root, props, opts)
 
 	return marshalSchemaInOrder(root, []byte(baseSchema))
 }
