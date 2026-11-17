@@ -241,7 +241,8 @@
               "integer",
               "null"
             ],
-            "description": "Additional disk size in GiB. Empty or 0 uses 20.",
+            "description": "Additional disk size in GiB. New disks start at 20. Omitted, blank or 0 also uses 20.",
+            "default": 20,
             "allOf": [
               {
                 "anyOf": [
@@ -332,10 +333,7 @@
               }
             ]
           }
-        },
-        "required": [
-          "disk_size"
-        ]
+        }
       },
       "title": "Additional Disks"
     },
@@ -733,7 +731,7 @@
       "type": "string",
       "title": "Provisioning Mode",
       "default": "iso",
-      "description": "'iso' boots from a Talos Image Factory ISO; 'clone' clones an existing Proxmox VM Template. Select the empty first row to clear this selection.",
+      "description": "'iso' boots from a Talos Image Factory ISO; 'clone' requires a VM Template. Selecting 'iso' or clearing this selector ignores saved clone options without deleting them. Legacy YAML with a template and no provisioning_mode still clones.",
       "oneOf": [
         {
           "const": "",
@@ -765,7 +763,7 @@
       "type": "string",
       "title": "VM Template (Clone Mode)",
       "default": "",
-      "description": "Proxmox VM Template to clone when Provisioning Mode is 'clone'. Leave empty in ISO mode. Select the empty first row to clear this selection.",
+      "description": "Required in clone mode. Ignored when Provisioning Mode is explicitly 'iso' or cleared. Select the empty first row to clear this selection.",
       "oneOf": [
         {
           "const": "",
@@ -777,7 +775,7 @@
       "type": "boolean",
       "title": "Full Clone",
       "default": true,
-      "description": "Perform a full disk clone (true) or linked clone (false) in clone mode."
+      "description": "Only used in clone mode: full disk copy when enabled, linked clone when disabled. If omitted, the provider uses a full clone. Ignored in ISO mode."
     },
     "architecture": {
       "type": "string",
@@ -1252,5 +1250,30 @@
         ]
       }
     }
-  }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "provisioning_mode": {
+            "const": "clone"
+          }
+        },
+        "required": [
+          "provisioning_mode"
+        ]
+      },
+      "then": {
+        "properties": {
+          "template_vmid": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "required": [
+          "template_vmid"
+        ]
+      }
+    }
+  ]
 }

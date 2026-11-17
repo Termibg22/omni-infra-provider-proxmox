@@ -7,6 +7,7 @@ package provider
 import (
 	"fmt"
 	"regexp"
+	"strings"
 
 	"github.com/siderolabs/omni-infra-provider-proxmox/internal/pkg/config"
 )
@@ -32,7 +33,7 @@ func (d *Data) Validate() error {
 		return fmt.Errorf("provisioning_mode must be iso or clone")
 	}
 
-	if d.ProvisioningMode == "clone" && d.TemplateVMID == "" {
+	if d.ProvisioningMode == "clone" && strings.TrimSpace(d.TemplateVMID) == "" {
 		return fmt.Errorf("template_vmid is required in clone mode")
 	}
 

@@ -2,7 +2,14 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at http://mozilla.org/MPL/2.0/.
 
-import { fireEvent, render, screen, waitFor } from "@testing-library/vue";
+import {
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+  within,
+} from "@testing-library/vue";
+import { flushPromises } from "@vue/test-utils";
 import Ajv from "ajv";
 import { expect, test, vi } from "vitest";
 import { defineComponent, ref, unref } from "vue";
@@ -52,6 +59,98 @@ function editor(input: Record<string, unknown>) {
   );
   return { model, jsonSchema, unmount: rendered.unmount };
 }
+
+test("adding disks initializes each Size to 20 without resetting existing sizes", async () => {
+  const { model } = editor({ disk_size: 48 });
+  await flushPromises();
+  const disks = within(
+    screen.getByText("Additional Disks", { exact: true }).parentElement!,
+  );
+  await fireEvent.click(
+    disks.getByRole("button", { name: "Add", exact: true }),
+  );
+  await waitFor(() =>
+    expect(model.value.additional_disks).toEqual([
+      { storage: "", disk_size: 20 },
+    ]),
+  );
+  expect((disks.getByRole("spinbutton") as HTMLInputElement).value).toBe("20");
+  await fireEvent.update(disks.getByRole("spinbutton"), "64");
+  await flushPromises();
+  await waitFor(() =>
+    expect(model.value.additional_disks).toEqual([
+      { storage: "", disk_size: 64 },
+    ]),
+  );
+  await fireEvent.click(
+    disks.getByRole("button", { name: "Add", exact: true }),
+  );
+  await waitFor(() =>
+    expect(model.value.additional_disks).toEqual([
+      { storage: "", disk_size: 64 },
+      { storage: "", disk_size: 20 },
+    ]),
+  );
+  expect(
+    disks
+      .getAllByRole("spinbutton")
+      .map((el) => (el as HTMLInputElement).value),
+  ).toEqual(["64", "20"]);
+  expect(model.value.disk_size).toBe(48);
+  const validate = new Ajv({ strict: false, allErrors: true }).compile(schema);
+  expect(validate(model.value), JSON.stringify(validate.errors)).toBe(true);
+});
+
+test("additional disk size allows the backend default and rejects invalid numbers", () => {
+  const validate = new Ajv({ strict: false, allErrors: true }).compile(schema);
+  for (const disk of [
+    {},
+    { disk_size: null },
+    { disk_size: 0 },
+    { disk_size: 20 },
+  ]) {
+    expect(
+      validate({ additional_disks: [disk] }),
+      JSON.stringify(validate.errors),
+    ).toBe(true);
+  }
+  for (const size of [-1, 1.5, "20"]) {
+    expect(validate({ additional_disks: [{ disk_size: size }] })).toBe(false);
+  }
+});
+
+test("clone mode requires a template while ISO and a cleared mode preserve clone settings", async () => {
+  const validate = new Ajv({ strict: false, allErrors: true }).compile(schema);
+  expect(validate({ provisioning_mode: "clone" })).toBe(false);
+  expect(validate({ provisioning_mode: "clone", template_vmid: "" })).toBe(
+    false,
+  );
+  expect(validate({ provisioning_mode: "iso" })).toBe(true);
+  expect(validate({ provisioning_mode: "" })).toBe(true);
+  const source = {
+    provisioning_mode: "clone",
+    template_vmid: "9000 (talos-template)",
+    full_clone: false,
+  };
+  const { model } = editor(source);
+  await flushPromises();
+  const select = document
+    .getElementById("#/properties/provisioning_mode-input")!
+    .querySelector("[role=combobox]")!;
+  for (const mode of ["iso", "", "clone"]) {
+    await fireEvent.keyDown(select, { key: "ArrowDown" });
+    const options = await screen.findAllByRole("option");
+    await fireEvent.keyDown(
+      options.find((option) => option.textContent?.trim() === mode)!,
+      { key: "Enter" },
+    );
+    await waitFor(() =>
+      expect(model.value).toEqual({ ...source, provisioning_mode: mode }),
+    );
+    expect(validate(model.value), JSON.stringify(validate.errors)).toBe(true);
+  }
+});
+
 test("unmodified Omni 1.13.3 shows saved flat hardware without mutating values or inserting null", async () => {
   const source = {
     workload_profile: "storage-node",

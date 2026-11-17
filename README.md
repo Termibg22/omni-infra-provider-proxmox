@@ -33,11 +33,11 @@ Despite its historical name, `OMNI_SERVICE_ACCOUNT_KEY` must contain an **infras
 docker run -d --name omni-proxmox --restart unless-stopped \
   --mount type=bind,source="$(pwd)/config.yaml",target=/config.yaml,readonly \
   -e OMNI_ENDPOINT -e OMNI_SERVICE_ACCOUNT_KEY \
-  ghcr.io/termibg22/omni-infra-provider-proxmox:v4.1.4 \
+  ghcr.io/termibg22/omni-infra-provider-proxmox:v4.1.5 \
   --config-file /config.yaml
 ```
 
-`v4.1.4` simplifies storage and device controls and validates PCI/USB mappings against node placement. It works with unmodified Omni.
+`v4.1.5` initializes additional disks at 20 GiB and respects an explicit ISO or cleared provisioning mode even when a template is saved. It works with unmodified Omni.
 Do not use `latest` to pin a production deployment.
 
 ## Create a Machine Class
@@ -96,10 +96,10 @@ spec:
 
 Apply it with `omnictl apply -f machine-class.yaml`, then select the class when configuring a cluster's machine sets.
 
-## Form compatibility and updates (v4.1.4)
+## Form compatibility and updates (v4.1.5)
 
 Both schema modes show the same streamlined VM form. `--schema-mode` remains accepted for compatibility.
-The hosted Omni renderer generates its own layout and ignores provider-supplied tabs and JSON Schema defaults.
+The hosted Omni renderer generates its own layout and ignores provider-supplied tabs. It does not apply field defaults when opening the form, but does apply item-property defaults when adding an array item.
 Boot Disk and Primary NIC have separate headings. Cores, Memory and Size use short labels; units and defaults are in their help text.
 Every dropdown offers an empty first row to clear a selection; `auto` is no longer a visible option.
 Workload profiles, network bonds, CEL storage expressions, complete-device overrides, VM Firewall Options and ZFS Storage Replication are no longer shown in the form. Existing YAML using these fields remains supported.
@@ -107,6 +107,8 @@ Storage is the only storage selector in the form. Choosing it takes precedence o
 The current Omni renderer cannot collapse provider-defined sections.
 Blank placement fields mean `auto`; omitted or zero CPU/RAM values use 2 cores and 4096 MiB. Saved nonzero values are displayed directly.
 Numeric limits live in validation subschemas to avoid Omni 1.13.3 converting missing values to NaN/null on mount.
+Adding an Additional Disk writes 20 into Size immediately. Existing disks with an omitted, null or zero size also use 20 GiB; a size is no longer required solely to accept that default.
+Clone fields remain visible in both modes: the stock editor does not accept provider-defined visibility rules. Schema conditions validate a required template in clone mode, but cannot hide controls. Its variant selector replaces data when switching, so it is not used to hide saved settings.
 
 Node choices come from the current `/nodes` inventory. Disk destinations require `enabled=1`, `active=1` and `images` in their per-node content list.
 A `rootdir`-only storage supports containers, not VM disks, and is excluded. Stale references in config, HA or mappings do not create selectable nodes.
@@ -215,6 +217,7 @@ disks:
 The template must already contain the intended Talos version, firmware, and extensions, and must support NoCloud configuration.
 The configured boot bus must match the template.
 Disk resizing grows the boot disk when needed; retries preserve existing disk volumes.
+Selecting `iso` or clearing Provisioning Mode ignores saved template/clone settings without deleting them. For backward compatibility, YAML that omits `provisioning_mode` entirely and specifies `template_vmid` still clones. Changing the effective mode on an existing VM requires reprovisioning.
 
 ## Build and verify
 

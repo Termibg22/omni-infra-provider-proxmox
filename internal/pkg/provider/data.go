@@ -530,7 +530,14 @@ func (d *Data) EffectiveExtensions() []string {
 
 // IsTemplateClone reports whether this MachineClass clones an existing Proxmox VM template.
 func (d *Data) IsTemplateClone() bool {
-	return d.ProvisioningMode == "clone" || strings.TrimSpace(d.TemplateVMID) != ""
+	if d.ProvisioningMode != "" {
+		return d.ProvisioningMode == "clone"
+	}
+
+	// A cleared selector means ISO, even if a template is still saved. Keep
+	// inferring clone mode only for legacy YAML that omits provisioning_mode.
+	return !d.explicitFields["provisioning_mode"] && !d.explicitFields["os.provisioning_mode"] &&
+		strings.TrimSpace(d.TemplateVMID) != ""
 }
 
 // ParsedTemplateVMID extracts the integer VMID from TemplateVMID (which may be "9000" or "9000 (talos-tpl)").

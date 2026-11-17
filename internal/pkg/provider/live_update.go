@@ -76,7 +76,7 @@ func creationOnlyFields(d Data) map[string]any {
 
 	return map[string]any{
 		"firmware":           []any{cmp.Or(d.Bios, "seabios"), d.SecureBoot, d.TPM, cmp.Or(d.MachineType, "pc"), d.SCSIHW, d.SerialConsole, d.Hugepages, d.Balloon, d.NUMA},
-		"installation media": []any{d.ProvisioningMode, d.TemplateVMID, d.Architecture, d.EffectiveExtensions(), d.ExtraKernelArgs},
+		"installation media": []any{d.ProvisioningMode, d.IsTemplateClone(), d.TemplateVMID, d.Architecture, d.EffectiveExtensions(), d.ExtraKernelArgs},
 		"guest networking":   []any{guestNICs, d.Bonds, d.DNSServers, d.DNSSearchDomains},
 		"Talos volumes":      volumes,
 	}

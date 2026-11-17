@@ -1,3 +1,10 @@
+## [Omni Infra Provider Proxmox 4.1.5](https://github.com/Termibg22/omni-infra-provider-proxmox/tree/v4.1.5)
+
+- Initialize each new Additional Disk with a 20 GiB size in stock Omni; accept omitted, null and zero sizes as the same backend default.
+- Respect explicitly selected ISO or cleared provisioning mode when a template remains saved; preserve implicit cloning for legacy YAML with no mode.
+- Require a template in clone mode during schema validation and reject changes to the effective mode during live updates.
+- Verify adding/editing multiple disks and switching provisioning modes with the original Omni renderer. Document that conditional field visibility remains unsupported.
+
 ## [Omni Infra Provider Proxmox 4.1.4](https://github.com/Termibg22/omni-infra-provider-proxmox/tree/v4.1.4)
 
 - Replace visible CEL storage expressions with the Storage selector; retain compatibility with saved YAML.

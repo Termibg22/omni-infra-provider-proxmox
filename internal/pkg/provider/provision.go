@@ -460,7 +460,7 @@ func (p *Provisioner) ProvisionSteps() []provision.Step[*resources.Machine] {
 				pctx.State.TypedSpec().Value.Pool = poolValue
 			}
 
-			// Branch 1: Clone from Proxmox VM Template when `provisioning_mode: clone` or `template_vmid` is set
+			// Branch 1: Clone from a Proxmox VM template when the effective mode is clone.
 			if data.IsTemplateClone() {
 				return p.cloneFromTemplate(ctx, logger, pctx, data, vmid, primaryStorage, poolValue)
 			}

@@ -1,6 +1,15 @@
-# Correcciones del editor e inventario: 4.1.4
+# Correcciones del editor e inventario: 4.1.5
 
 La solución modifica exclusivamente el proveedor. No incluye parches, extensiones de navegador ni cambios al Omni alojado.
+
+## Cambios de 4.1.5
+
+- Add en Additional Disks crea cada disco con `disk_size: 20`. Antes, el control mostraba 0 aunque la propiedad no existía, y `required` rechazaba el objeto. Se añade el valor predeterminado del elemento y se retira esa obligación: tamaño omitido, null o 0 usa 20 GiB también en clases antiguas.
+- Elegir `iso` o vaciar Provisioning Mode tiene prioridad sobre una plantilla guardada. Antes, tener `template_vmid` bastaba para seguir clonando. Los campos se conservan para volver a clone; el YAML antiguo sin `provisioning_mode` mantiene la inferencia de clonación.
+- El esquema exige una plantilla solo al seleccionar clone. Cambiar el modo efectivo de una VM existente requiere reaprovisionar, también al vaciar un modo antes implícito.
+- Se comprueba añadir dos discos, editar el primero sin perderlo y alternar clone/iso/vacío conservando la plantilla y Full Clone.
+
+La visibilidad condicional solicitada no está implementada: el editor original construye una lista estática de controles y no consume reglas de visibilidad del proveedor. `if`/`then` permite validar, pero no ocultar. El control de variantes disponible sustituye datos al cambiar de variante, por lo que no se usa para ocultar opciones conservándolas.
 
 ## Cambios de 4.1.4
 
@@ -48,7 +57,7 @@ El YAML agrupado de v4 sigue siendo válido en el backend, pero sus valores solo
 - Pruebas Go de inventario con un nodo eliminado aún presente en recursos agregados, almacenamiento, grupos y mapeos.
 - API simulada con un destino válido, uno `rootdir`, uno deshabilitado y otro inactivo.
 - Detector de carreras, `go vet`, lint completo y compilación Linux amd64/arm64.
-- Siete pruebas de compatibilidad con el renderizador original de Omni v1.13.3, commit `1834114db70c2bbfff71cd4ba8a1882a01504193`, sin modificar sus componentes: datos antiguos conservados, formulario nuevo sin NaN, edición durante actualización de esquema, selectores vaciables, campos eliminados y títulos cortos, opciones PCI/USB reales y validación de combinaciones de nodo/grupo/mappings.
+- Diez pruebas de compatibilidad con el renderizador original de Omni v1.13.3, commit `1834114db70c2bbfff71cd4ba8a1882a01504193`, sin modificar sus componentes: datos antiguos conservados, formulario nuevo sin NaN, edición durante actualización de esquema, selectores vaciables, campos eliminados y títulos cortos, opciones PCI/USB y validación de combinaciones de nodo/grupo/mappings, creación y edición de discos, valores predeterminados y cambios de modo de aprovisionamiento.
 - Prueba visual local usando ese editor original y datos sintéticos; no se modificó ninguna clase ni VM real.
 
 Para repetir las pruebas, generar desde la raíz del proveedor un esquema sintético con `go run hack/test/omni-ui/schema_fixture.go > /tmp/provider-schema.json`. En un checkout de Omni de esa revisión con sus dependencias de frontend instaladas, copiar `hack/test/omni-ui/provider-schema.spec.ts` a `frontend/src/components/Form/ProviderSchema.spec.ts` y ejecutar desde `frontend`:

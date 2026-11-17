@@ -19,6 +19,71 @@ import (
 	"go.yaml.in/yaml/v4"
 )
 
+func TestAdditionalDiskDefaultSize(t *testing.T) {
+	for _, item := range []string{"{}", "{disk_size: null}", "{disk_size: 0}", "{disk_size: 20}"} {
+		t.Run(item, func(t *testing.T) {
+			var data Data
+
+			require.NoError(t, yaml.Unmarshal([]byte("disk_size: 48\nadditional_disks: ["+item+"]\n"), &data))
+			data.ApplyWorkloadProfile()
+			require.NoError(t, data.Validate())
+			disks := data.EffectiveDisks()
+			require.Len(t, disks, 2)
+			require.Equal(t, 48, disks[0].EffectiveSize())
+			require.Equal(t, 20, disks[1].EffectiveSize())
+		})
+	}
+}
+
+func TestProvisioningModeOverridesSavedTemplate(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		input string
+		clone bool
+	}{
+		{"default ISO", "{}", false},
+		{"legacy template", "template_vmid: '9000'", true},
+		{"explicit clone", "provisioning_mode: clone\ntemplate_vmid: '9000'", true},
+		{"ISO keeps template", "provisioning_mode: iso\ntemplate_vmid: '9000'", false},
+		{"cleared mode keeps template", "provisioning_mode: ''\ntemplate_vmid: '9000'", false},
+		{"grouped legacy template", "os: {template_vmid: '9000'}", true},
+		{"grouped clone", "os: {provisioning_mode: clone, template_vmid: '9000'}", true},
+		{"grouped ISO", "os: {provisioning_mode: iso, template_vmid: '9000'}", false},
+		{"grouped cleared mode", "os: {provisioning_mode: '', template_vmid: '9000'}", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var data Data
+
+			require.NoError(t, yaml.Unmarshal([]byte(tc.input), &data))
+			data.ApplyWorkloadProfile()
+			require.NoError(t, data.Validate())
+			require.Equal(t, tc.clone, data.IsTemplateClone())
+
+			if strings.Contains(tc.input, "9000") {
+				require.Equal(t, "9000", data.TemplateVMID, "changing mode must preserve the saved template")
+			}
+		})
+	}
+}
+
+func TestCloneModeRequiresTemplate(t *testing.T) {
+	for _, template := range []string{"", " ", "none"} {
+		data := Data{ProvisioningMode: "clone", TemplateVMID: template}
+		data.ApplyWorkloadProfile()
+		require.ErrorContains(t, data.Validate(), "template_vmid is required in clone mode")
+	}
+}
+
+func TestClearedCloneModeRequiresReprovisioning(t *testing.T) {
+	const old = "template_vmid: '9000'"
+
+	var data Data
+
+	require.NoError(t, yaml.Unmarshal([]byte(old+"\nprovisioning_mode: ''\n"), &data))
+	data.ApplyWorkloadProfile()
+	require.ErrorContains(t, validateLiveUpdate(old, data), "changing installation media")
+}
+
 func TestAdditionalDiskAutoKeepsLegacyStorageSelector(t *testing.T) {
 	var data Data
 

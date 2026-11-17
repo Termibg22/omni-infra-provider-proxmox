@@ -26,6 +26,7 @@ func main() {
 		NodeGroups:     map[string][]string{"rack-a": {"pve1", "pve2"}, "rack-b": {"pve3"}},
 		DiskStorages:   []string{"local-zfs"},
 		ISOStorages:    []string{"local"},
+		Templates:      []string{"9000 (talos-template)"},
 		NetworkBridges: []string{"vmbr0"},
 		CPUTypes:       provider.DefaultCPUTypes,
 		PCIMappings:    []string{"gpu-one", "gpu-two"},
