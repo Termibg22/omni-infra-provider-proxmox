@@ -33,14 +33,14 @@ Despite its historical name, `OMNI_SERVICE_ACCOUNT_KEY` must contain an **infras
 docker run -d --name omni-proxmox --restart unless-stopped \
   --mount type=bind,source="$(pwd)/config.yaml",target=/config.yaml,readonly \
   -e OMNI_ENDPOINT -e OMNI_SERVICE_ACCOUNT_KEY \
-  ghcr.io/termibg22/omni-infra-provider-proxmox:v4.1.9 \
+  ghcr.io/termibg22/omni-infra-provider-proxmox:v4.1.10 \
   --config-file /config.yaml
 ```
 
-`v4.1.9` fixes VM destruction blocked by missing permission to remove a private NoCloud ISO, and deletes all disks owned by the VM, including unreferenced disks on enabled storages. It retains the provisioning fix, editor keepalive and physical PCI/USB discovery, and works with unmodified Omni.
+`v4.1.10` fixes Secure Boot provisioning by preparing the EFI disk for Talos key enrollment. It retains VM/disk destruction fixes, the provisioning checkpoint fix, editor keepalive and physical PCI/USB discovery, and works with unmodified Omni.
 Do not use `latest` to pin a production deployment.
 
-If requests are stuck at that step, update and restart the provider while keeping the existing requests and VMs. The SDK resumes from the saved checkpoint (`syncHARules`) and records the applied configuration; it does not repeat VM creation or startup. This recovery path is covered by a controller regression test. The configuration now lives in the provider's Machine spec instead of an annotation, avoiding both control-character restrictions and the 16 KiB annotation limit. Older applied-data annotations remain readable for live-update validation.
+If requests are stuck at `recordProviderData`, update and restart the provider while keeping the existing requests and VMs. The SDK resumes from the saved checkpoint (`syncHARules`) and records the applied configuration; it does not repeat VM creation or startup. This recovery path is covered by a controller regression test. The configuration now lives in the provider's Machine spec instead of an annotation, avoiding both control-character restrictions and the 16 KiB annotation limit. Older applied-data annotations remain readable for live-update validation.
 
 ## Create a Machine Class
 
@@ -218,7 +218,18 @@ usb_devices:
 HA affinity rules require Proxmox VE 9+.
 Storage replication requires suitable ZFS storage and another eligible node.
 Provisioning requires one candidate node that provides every selected PCI/USB device or mapping.
-Use `bios: ovmf` when requesting `secure_boot: true`.
+
+### Secure Boot
+
+Talos supports Secure Boot with a signed boot image and trusted keys in UEFI. It verifies the bootloader and operating system and can be combined with TPM-based disk encryption. Enabling TPM alone does not configure disk encryption.
+
+For a new VM provisioned from ISO, set `bios: ovmf` and `secure_boot: true`. The provider requests the Secure Boot variant of the Talos NoCloud ISO and creates a persistent 4 MiB EFI disk with `pre-enrolled-keys=0`. This leaves the firmware in setup mode so the signed Talos ISO can automatically enroll its keys on first boot. Proxmox's pre-enrolled distribution/Microsoft keys do not trust Talos and cause `Access Denied — rejected probably by Secure Boot`. An unchecked Secure Boot option uses the regular ISO; the two variants have separate cache keys.
+
+This fixes newly created EFI disks. Updating the provider or editing a Machine Class does not clear keys already stored in an existing EFI disk. For VMs that have **never booted or installed Talos**, recreate the failed machine through Omni after updating, or stop the VM and replace only its EFI disk with a fresh 4 MiB EFI disk on the same storage with **Pre-Enroll Keys unchecked**, keeping the signed Talos ISO and all OS/data disks. Changing only the `pre-enrolled-keys` flag on an existing volume does not erase its stored keys. Do not reset EFI/TPM state on an installed machine: its boot configuration or encrypted volumes may depend on it.
+
+Clone mode preserves the template's firmware and enrolled keys, so the template must already be configured for Secure Boot. After boot, verify the actual guest state with `talosctl get securitystate` using the machine's connection credentials; the `pre-enrolled-keys` creation flag is not a report of the current guest Secure Boot state.
+
+See the [Talos Secure Boot guide](https://docs.siderolabs.com/talos/v1.14/platform-specific-installations/bare-metal-platforms/secureboot) and [Talos Proxmox guide](https://docs.siderolabs.com/talos/v1.14/platform-specific-installations/virtualized-platforms/proxmox).
 
 ### Clone a template
 

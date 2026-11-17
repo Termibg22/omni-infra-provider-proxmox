@@ -381,7 +381,7 @@ func TestBuildFirmwareOptions(t *testing.T) {
 			},
 		},
 		{
-			name: "OVMF with SecureBoot and TPM 2.0",
+			name: "OVMF lets the signed Talos ISO enroll its keys with TPM 2.0",
 			data: provider.Data{
 				Bios:       "ovmf",
 				SecureBoot: true,
@@ -390,7 +390,7 @@ func TestBuildFirmwareOptions(t *testing.T) {
 			},
 			expected: map[string]any{
 				"bios":      "ovmf",
-				"efidisk0":  "local-lvm:1,efitype=4m,pre-enrolled-keys=1",
+				"efidisk0":  "local-lvm:1,efitype=4m,pre-enrolled-keys=0",
 				"tpmstate0": "local-lvm:1,version=v2.0",
 				"vga":       "virtio",
 			},

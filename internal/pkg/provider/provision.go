@@ -1190,14 +1190,12 @@ func buildFirmwareOptions(data Data, selectedStorage string) []proxmox.VirtualMa
 		})
 
 		if data.Bios == "ovmf" {
-			preEnrolled := 0
-			if data.SecureBoot {
-				preEnrolled = 1
-			}
-
+			// Proxmox's pre-enrolled keys do not trust the Talos Image Factory.
+			// Keep a fresh EFI disk in setup mode: the signed Talos ISO requested
+			// by uploadISO enrolls its own keys on first boot and enables Secure Boot.
 			options = append(options, proxmox.VirtualMachineOption{
 				Name:  "efidisk0",
-				Value: fmt.Sprintf("%s:1,efitype=4m,pre-enrolled-keys=%d", selectedStorage, preEnrolled),
+				Value: fmt.Sprintf("%s:1,efitype=4m,pre-enrolled-keys=0", selectedStorage),
 			})
 		}
 	}

@@ -1,6 +1,15 @@
-# Correcciones del provider: 4.1.9
+# Correcciones del provider: 4.1.10
 
 La solución modifica exclusivamente el proveedor. No incluye parches, extensiones de navegador ni cambios al Omni alojado.
+
+## Cambios de 4.1.10
+
+- La consola adjunta muestra que Secure Boot rechaza la ISO. La clase real tiene `bios: ovmf` y Secure Boot activado; la captura de hardware muestra `pre-enrolled-keys=1`. El provider ya solicitaba la ISO firmada, pero inicializaba el EFI con claves que no confían en Talos.
+- El EFI nuevo se crea con `efitype=4m,pre-enrolled-keys=0` para que el cargador de la ISO firmada registre automáticamente sus claves. Se conserva el selector Secure Boot y la elección de la ISO correspondiente.
+- La prueba de regresión ejecuta los pasos de descarga y creación contra una API Proxmox simulada y el resolvedor real de imágenes del SDK de Omni. Comprueba ambas variantes de ISO, su caché separada, el EFI y los dos discos. Falla con la petición anterior que precargaba claves.
+- Se amplía la ayuda del campo y se documenta cómo recuperar máquinas que nunca llegaron a instalar Talos. La corrección no reescribe el EFI de VMs existentes, no modifica su TPM ni convierte plantillas. La clase de Omni se ha consultado, sin guardarla ni modificarla.
+
+La preparación del EFI sigue el procedimiento documentado por Talos. Las pruebas no arrancan una VM real; la comprobación del estado `securitystate` queda pendiente del despliegue y del primer arranque con el EFI corregido.
 
 ## Cambios de 4.1.9
 

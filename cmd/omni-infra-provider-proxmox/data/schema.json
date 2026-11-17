@@ -879,7 +879,7 @@
       "type": "boolean",
       "title": "UEFI Secure Boot",
       "default": false,
-      "description": "Enable UEFI Secure Boot (requires BIOS='ovmf')."
+      "description": "Verify the Talos bootloader and operating system at boot. Requires BIOS / Firmware = ovmf. New ISO VMs enroll Talos keys automatically. Clones inherit the template's firmware and keys. Existing VMs require reprovisioning to change this setting."
     },
     "tpm": {
       "type": "boolean",

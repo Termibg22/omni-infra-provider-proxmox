@@ -1,3 +1,9 @@
+## [Omni Infra Provider Proxmox 4.1.10](https://github.com/Termibg22/omni-infra-provider-proxmox/tree/v4.1.10)
+
+- Fix Secure Boot VMs stopping at the firmware's `Access Denied` screen: create the EFI disk without Proxmox's pre-enrolled keys, allowing the signed Talos ISO to enroll its own keys on first boot.
+- Keep Secure Boot media selection and separate signed/unsigned ISO cache keys. Exercise SDK media resolution, Proxmox download requests and VM creation with a boot disk and an additional disk.
+- Explain Secure Boot, template inheritance and recovery of never-booted VMs in the field help and documentation. Existing EFI/TPM state is not reset automatically.
+
 ## [Omni Infra Provider Proxmox 4.1.9](https://github.com/Termibg22/omni-infra-provider-proxmox/tree/v4.1.9)
 
 - Unblock VM destruction when a token can delete VMs but lacks `Datastore.Allocate` to remove the private NoCloud ISO. Perform bounded ISO cleanup separately and report any remaining ISO without blocking VM/disk deletion.
