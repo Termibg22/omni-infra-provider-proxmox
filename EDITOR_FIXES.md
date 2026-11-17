@@ -1,6 +1,16 @@
-# Correcciones del editor e inventario: 4.1.6
+# Correcciones del editor e inventario: 4.1.7
 
 La solución modifica exclusivamente el proveedor. No incluye parches, extensiones de navegador ni cambios al Omni alojado.
+
+## Cambios de 4.1.7
+
+- Se reprodujo el fallo en el Omni real con provider 4.1.6: Cores cambió de 8 sin guardar a 2 tras `ERR_CONNECTION_CLOSED`. La clase seguía en la misma versión guardada, y el estado del provider conservaba su versión y exactamente el mismo esquema.
+- El cierre afectó simultáneamente a los streams de clases, provider, métricas y notificaciones. Se observaron cierres alrededor de 60 segundos sin actividad. No se identifica qué componente de red aplica ese límite.
+- Una prueba de lectura abrió el stream existente de salud del provider, que emite eventos cada 30 segundos. El borrador permaneció intacto durante 216 segundos; al cerrar ese stream volvió a perderse. No se guardó ninguna clase ni se modificó ninguna VM.
+- Se añade un latido cada 30 segundos en la anotación `proxmox.omni.siderolabs.io/editor-heartbeat` de `InfraProviderStatus`, el recurso que el editor ya observa. No cambia el esquema, no vuelve a descubrir inventario y no escribe MachineClasses. El latido de salud existente usa otro recurso que el editor no observa.
+- `--editor-keepalive-interval` permite ajustar el intervalo o desactivarlo con `0`. Cada intento tiene un timeout de 10 segundos; un error se registra y no detiene el aprovisionamiento ni los intentos siguientes. No se crea un estado vacío durante el arranque ni se resucita uno en destrucción.
+
+Es una mitigación del cierre por inactividad observado. Un corte real de red, una recarga manual o la caducidad de sesión siguen pudiendo perder el borrador porque Omni no lo persiste. Los eventos de metadatos del nuevo código se han probado en el editor original; la prueba real descrita arriba comprobó el mecanismo con el stream de salud existente, no un despliegue de 4.1.7.
 
 ## Cambios de 4.1.6
 
@@ -52,7 +62,15 @@ Una clase antigua que use `disks`/`nics` conserva esos overrides y debe editarse
 
 El editor original usa grupos estáticos para objetos. No expone un acordeón desde el esquema del proveedor. El selector de variantes que sí incluye JSONForms reinicializa datos al cambiar de variante, por lo que no sirve para plegar una sección conservando sus ajustes. En 4.1.4 se ha retirado VM Firewall Options del formulario.
 
-En la sesión real se observaron errores de red simultáneos en los streams de MachineClasses, InfraProviderStatuses, métricas y notificaciones. El código original de Omni vuelve a asignar el formulario al recibir otra vez el recurso MachineClass tras reconectar. El proveedor no controla esa conexión navegador-SaaS. La eliminación de su temporizador quita publicaciones periódicas de esquema, pero no arregla por sí sola esas reconexiones ni una recarga manual. No se presenta como resuelta esa pérdida de borradores.
+El código original de Omni vuelve a asignar el formulario al recibir otra vez el recurso MachineClass tras reconectar. La eliminación del temporizador de esquema no solucionaba los cierres por inactividad observados. El latido de 4.1.7 mantiene tráfico en la conexión para mitigarlos; no modifica cómo Omni trata el borrador después de una desconexión real.
+
+La prueba de diagnóstico `hack/test/omni-ui/machine-class-reconnect.spec.ts` reproduce esa pérdida en la página MachineClass completa de Omni v1.13.3, sin modificar sus componentes. Usa sus implementaciones reales de MachineTemplate, JsonForm, useResourceWatch y Stream, con una API HTTP simulada:
+
+- Una actualización del estado/esquema del provider conserva Cores = 8 en el formulario.
+- Diez latidos de metadatos conservan el mismo control, el foco, Cores = 8 y un disco adicional de 64 GiB sin guardar.
+- Tras cortar el stream de MachineClasses, la reconexión devuelve exactamente la misma clase guardada, con la misma versión y Cores = 2. El editor reemplaza el 8 sin guardar por el 2. No hay ninguna escritura a la API ni cambio en el estado/esquema del provider.
+
+La prueba de reconexión documenta el fallo que permanece ante un corte real. Las pruebas anteriores sobre JsonForm por sí solo no cubrían el watcher de la página MachineClass. El provider no recibe el borrador del navegador y su esquema no puede cambiar este watcher ni persistir datos locales. La reproducción no atribuye el cierre de la conexión a la red del usuario, a un proxy ni al SaaS.
 
 Las listas nuevas sustituyen `auto` por la selección vacía. El backend sigue aceptando los sentinelas antiguos en YAML; si una clase antigua contiene un sentinel que el desplegable ya no ofrece, elegir la fila vacía lo reemplaza al guardar. Los valores reales como cache `none` o VGA `none` siguen siendo opciones válidas.
 
@@ -72,6 +90,7 @@ El YAML agrupado de v4 sigue siendo válido en el backend, pero sus valores solo
 - Detector de carreras, `go vet`, lint completo y compilación Linux amd64/arm64.
 - Once pruebas de compatibilidad con el renderizador original de Omni v1.13.3, commit `1834114db70c2bbfff71cd4ba8a1882a01504193`, sin modificar sus componentes: datos antiguos conservados, formulario nuevo sin NaN, edición durante actualización de esquema, selectores vaciables, campos eliminados y títulos cortos, opciones PCI/USB físicas y mappings, persistencia de sus etiquetas, validación de combinaciones de nodo/grupo/dispositivos, creación y edición de discos, valores predeterminados y cambios de modo de aprovisionamiento.
 - Prueba visual local usando ese editor original y datos sintéticos; no se modificó ninguna clase ni VM real.
+- Tres pruebas adicionales de la página completa: actualización de esquema, latidos de metadatos y reconexión. Pruebas Go con reloj virtual para emisión de eventos, conservación de recursos, arranque, destrucción, cancelación, desactivación y recuperación tras timeout.
 
 Para repetir las pruebas, generar desde la raíz del proveedor un esquema sintético con `go run hack/test/omni-ui/schema_fixture.go > /tmp/provider-schema.json`. En un checkout de Omni de esa revisión con sus dependencias de frontend instaladas, copiar `hack/test/omni-ui/provider-schema.spec.ts` a `frontend/src/components/Form/ProviderSchema.spec.ts` y ejecutar desde `frontend`:
 
@@ -82,3 +101,12 @@ PROXMOX_PROVIDER_SCHEMA=/tmp/provider-schema.json \
 
 Ese archivo es solo una prueba: no es un parche del producto ni debe incluirse en un build de Omni.
 Las pruebas reales de Proxmox siguen limitadas a lectura y simulación de API; no se ha hecho E2E con creación de VMs en el clúster del usuario.
+
+Para reproducir el diagnóstico de reconexión, copiar `hack/test/omni-ui/machine-class-reconnect.spec.ts` a `frontend/src/views/MachineClasses/ProviderReconnect.spec.ts` del mismo checkout original y ejecutar desde `frontend`:
+
+```sh
+PROXMOX_PROVIDER_SCHEMA=/tmp/provider-schema.json \
+  npm test -- --run src/views/MachineClasses/ProviderReconnect.spec.ts
+```
+
+Sus tres pruebas deben pasar en esa revisión: la de reconexión comprueba explícitamente la pérdida del borrador. No debe interpretarse un resultado verde como que Omni conserva los cambios después de un corte real de red.

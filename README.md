@@ -33,11 +33,11 @@ Despite its historical name, `OMNI_SERVICE_ACCOUNT_KEY` must contain an **infras
 docker run -d --name omni-proxmox --restart unless-stopped \
   --mount type=bind,source="$(pwd)/config.yaml",target=/config.yaml,readonly \
   -e OMNI_ENDPOINT -e OMNI_SERVICE_ACCOUNT_KEY \
-  ghcr.io/termibg22/omni-infra-provider-proxmox:v4.1.6 \
+  ghcr.io/termibg22/omni-infra-provider-proxmox:v4.1.7 \
   --config-file /config.yaml
 ```
 
-`v4.1.6` lists physical PCI/USB devices alongside Resource Mappings and removes Resource Affinity from the form. It works with unmodified Omni.
+`v4.1.7` adds an editor keepalive to mitigate idle connection resets that discard unsaved changes in hosted Omni. It retains physical PCI/USB discovery and works with unmodified Omni.
 Do not use `latest` to pin a production deployment.
 
 ## Create a Machine Class
@@ -96,7 +96,7 @@ spec:
 
 Apply it with `omnictl apply -f machine-class.yaml`, then select the class when configuring a cluster's machine sets.
 
-## Form compatibility and updates (v4.1.6)
+## Form compatibility and updates (v4.1.7)
 
 Both schema modes show the same streamlined VM form. `--schema-mode` remains accepted for compatibility.
 The hosted Omni renderer generates its own layout and ignores provider-supplied tabs. It does not apply field defaults when opening the form, but does apply item-property defaults when adding an array item.
@@ -120,8 +120,10 @@ Empty mapping lists can mean no mappings exist or the token cannot see them. Con
 Physical inventory requires `Sys.Audit` or `Sys.Modify` on `/` for [PCI](https://github.com/proxmox/pve-manager/blob/master/PVE/API2/Hardware/PCI.pm), and `Sys.Modify` on `/` for [USB](https://github.com/proxmox/pve-manager/blob/master/PVE/API2/Hardware/USB.pm). Inventory failures are logged per node and device type without hiding successfully discovered mappings or other device types.
 Proxmox allows direct physical passthrough only with `root@pam` password authentication; API tokens must use a Resource Mapping, as enforced by its [VM permission checks](https://github.com/proxmox/qemu-server/blob/master/src/PVE/API2/Qemu.pm). The provider does not create mappings or change permissions automatically. Physical selections pin placement to their named node and are checked again before VM creation or updates; the schema also rejects combinations spanning different nodes.
 
-Browser reloads and watch reconnections can discard unsaved changes in hosted Omni. The original Machine Class editor reloads its form when the watched class arrives again.
-Simultaneous network errors were observed across class, metrics, notification and provider streams; removing provider schema polling cannot prevent these independent SaaS/browser connection resets.
+The provider emits a metadata heartbeat every 30 seconds on its own `InfraProviderStatus`, which the editor already watches. This keeps otherwise idle browser connections active without changing the schema, rediscovering inventory, updating Machine Classes or touching VMs. The existing health heartbeat uses a separate resource that the editor does not watch. Set `--editor-keepalive-interval=0` to disable the new heartbeat.
+This mitigates the observed idle connection closure: the live editor lost changes after simultaneous `ERR_CONNECTION_CLOSED` errors; observing periodic health events kept the same draft intact for over three minutes, and closing that watch restored the failure. The exact network component closing the connection was not identified. The new metadata heartbeat was tested with the original editor; these tests are not a deployment of v4.1.7 to the live cluster.
+Actual network outages, browser reloads and session expiry can still discard unsaved changes in hosted Omni. The original Machine Class editor reloads its form when the watched class arrives again.
+The full-page diagnostic in `hack/test/omni-ui/machine-class-reconnect.spec.ts` reproduces an unsaved Cores change reverting from 8 to 2 when the class stream reconnects with the identical saved resource/version, without any provider schema update. This is a reproduction of the remaining defect, not a fix. The provider cannot access or persist the browser's unsaved draft.
 Save the class before reloading, or edit an exported manifest locally with `omnictl`; the provider does not silently rewrite Machine Classes.
 See [EDITOR_FIXES.md](EDITOR_FIXES.md) for the issue-by-issue scope and verification.
 
@@ -129,6 +131,7 @@ See [EDITOR_FIXES.md](EDITOR_FIXES.md) for the issue-by-issue scope and verifica
 | --- | --- | --- |
 | `--schema-mode` | `basic` | Compatibility flag; both values show the same form |
 | `--schema-refresh-interval` | `0` | Accepted for old deployments; ignored. Schema is published only at startup |
+| `--editor-keepalive-interval` | `30s` | Update a provider metadata timestamp to keep idle editor connections alive; `0` disables |
 | `--machineset-sync-interval` | `0` | Opt in to existing-VM updates, for example `30s` |
 | `--id` | `proxmox` | Infrastructure provider ID |
 | `--config-file` | required | Proxmox connection settings |

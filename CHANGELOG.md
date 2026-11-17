@@ -1,3 +1,11 @@
+## [Omni Infra Provider Proxmox 4.1.7](https://github.com/Termibg22/omni-infra-provider-proxmox/tree/v4.1.7)
+
+- Emit a provider metadata heartbeat every 30 seconds to mitigate idle browser connection closures that reset unsaved Machine Class edits in hosted Omni.
+- Keep the schema and inventory fixed; the heartbeat does not write Machine Classes or modify VMs. Add `--editor-keepalive-interval`, with `0` to disable.
+- Bound heartbeat requests, retry after errors, stop cleanly, and avoid creating incomplete or resurrecting deleted provider statuses.
+- Reproduce draft loss on a real connection closure and in the full original Omni editor. Verify repeated metadata events preserve unsaved CPU/disk changes, focus and the existing controls.
+- Document the remaining limitation: real outages, manual reloads and session expiry still require draft protection in Omni itself.
+
 ## [Omni Infra Provider Proxmox 4.1.6](https://github.com/Termibg22/omni-infra-provider-proxmox/tree/v4.1.6)
 
 - Populate PCI/USB selectors from per-node hardware inventory as well as cluster Resource Mappings; display device names, nodes and addresses.
