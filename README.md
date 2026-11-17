@@ -33,11 +33,11 @@ Despite its historical name, `OMNI_SERVICE_ACCOUNT_KEY` must contain an **infras
 docker run -d --name omni-proxmox --restart unless-stopped \
   --mount type=bind,source="$(pwd)/config.yaml",target=/config.yaml,readonly \
   -e OMNI_ENDPOINT -e OMNI_SERVICE_ACCOUNT_KEY \
-  ghcr.io/termibg22/omni-infra-provider-proxmox:v4.1.8 \
+  ghcr.io/termibg22/omni-infra-provider-proxmox:v4.1.9 \
   --config-file /config.yaml
 ```
 
-`v4.1.8` fixes provisioning failing at `recordProviderData` with `annotation value ... must not contain control characters`. It retains the editor keepalive and physical PCI/USB discovery, and works with unmodified Omni.
+`v4.1.9` fixes VM destruction blocked by missing permission to remove a private NoCloud ISO, and deletes all disks owned by the VM, including unreferenced disks on enabled storages. It retains the provisioning fix, editor keepalive and physical PCI/USB discovery, and works with unmodified Omni.
 Do not use `latest` to pin a production deployment.
 
 If requests are stuck at that step, update and restart the provider while keeping the existing requests and VMs. The SDK resumes from the saved checkpoint (`syncHARules`) and records the applied configuration; it does not repeat VM creation or startup. This recovery path is covered by a controller regression test. The configuration now lives in the provider's Machine spec instead of an annotation, avoiding both control-character restrictions and the 16 KiB annotation limit. Older applied-data annotations remain readable for live-update validation.
@@ -98,7 +98,17 @@ spec:
 
 Apply it with `omnictl apply -f machine-class.yaml`, then select the class when configuring a cluster's machine sets.
 
-## Form compatibility and updates (v4.1.8)
+## Destroying a cluster
+
+When Omni tears down a MachineRequest, the provider stops its VM, removes protection when needed, and asks Proxmox to delete it with `purge=1` and `destroy-unreferenced-disks=1`. This removes the VM's used/owned disks and matching unreferenced disks on enabled storages, and removes its references from backup/replication jobs and HA configuration. The provider waits for the deletion task to succeed before completing teardown; failed deletion stays pending for retry. The [Proxmox VM API](https://github.com/proxmox/qemu-server/blob/master/src/PVE/API2/Qemu.pm) requires `VM.Allocate` on `/vms/<vmid>` for deletion and `VM.PowerMgmt` to stop it.
+
+The private `user-data-<vmid>.iso` needs the separate `Datastore.Allocate` privilege on its ISO storage (for example `/storage/local`), as specified by the [storage content API](https://github.com/proxmox/pve-storage/blob/master/src/PVE/API2/Storage/Content.pm). `Datastore.AllocateSpace` and `Datastore.AllocateTemplate` alone are insufficient. With privilege separation enabled, both the user and token must have the required privilege.
+
+ISO cleanup is bounded to 30 seconds and cannot prevent VM/disk deletion. If it fails, the warning names the remaining volume, endpoint and permission. Only the attached private NoCloud ISO is targeted; shared Talos installation images and other VMs' images are preserved. Older versions called the library's VM deletion helper, which tried deleting this ISO first and aborted before deleting the VM on a permission error.
+
+Upgrade and restart the provider to resume requests already marked for destruction. Existing authorization errors for VM deletion or stopping still need the corresponding Proxmox permissions; the provider does not change ACLs.
+
+## Form compatibility and updates (v4.1.9)
 
 Both schema modes show the same streamlined VM form. `--schema-mode` remains accepted for compatibility.
 The hosted Omni renderer generates its own layout and ignores provider-supplied tabs. It does not apply field defaults when opening the form, but does apply item-property defaults when adding an array item.

@@ -1,3 +1,10 @@
+## [Omni Infra Provider Proxmox 4.1.9](https://github.com/Termibg22/omni-infra-provider-proxmox/tree/v4.1.9)
+
+- Unblock VM destruction when a token can delete VMs but lacks `Datastore.Allocate` to remove the private NoCloud ISO. Perform bounded ISO cleanup separately and report any remaining ISO without blocking VM/disk deletion.
+- Delete VMs with `purge=1` and `destroy-unreferenced-disks=1`, including all VM-owned disks on enabled storages and associated configuration references. Let Proxmox purge replication jobs as part of deletion.
+- Preserve shared installation media and other VMs' images. Add operation/VM context to deletion errors and retain the request and machine state when deletion fails or returns no task.
+- Reproduce the ISO permission failure, verify disk-deletion parameters, and exercise failed deletion and successful retries through the Omni SDK controller. Document the separate VM and ISO cleanup permissions.
+
 ## [Omni Infra Provider Proxmox 4.1.8](https://github.com/Termibg22/omni-infra-provider-proxmox/tree/v4.1.8)
 
 - Fix provisioning failing at `recordProviderData` after the VM has started: store applied configuration in the provider's Machine spec, since Omni rejects multiline YAML in annotations.

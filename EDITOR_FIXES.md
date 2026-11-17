@@ -1,6 +1,15 @@
-# Correcciones del provider: 4.1.8
+# Correcciones del provider: 4.1.9
 
 La solución modifica exclusivamente el proveedor. No incluye parches, extensiones de navegador ni cambios al Omni alojado.
+
+## Cambios de 4.1.9
+
+- Se reproduce el bloqueo de Destroy: la librería intenta borrar primero `user-data-<vmid>.iso`, pero el token no tiene `Datastore.Allocate` para borrar contenido del almacenamiento. El error genérico ocultaba esa operación e impedía llegar al borrado de la VM, aunque el token sí tuviera `VM.Allocate` y `VM.PowerMgmt`.
+- La eliminación de la VM usa directamente la API de Proxmox con `purge=1` y `destroy-unreferenced-disks=1`. Se eliminan los discos usados/propios y los discos sin referencia con el mismo VMID en almacenamientos habilitados. Proxmox limpia sus referencias en trabajos de backup, replicación y HA.
+- La limpieza de la ISO privada tiene un límite de 30 segundos y un fallo no bloquea el borrado principal. El aviso identifica el volumen, la operación y el permiso necesario. Se conservan la ISO compartida de Talos y las imágenes de otras VMs.
+- Se espera el resultado de la tarea de borrado. Las pruebas con el controlador del SDK comprueban que un rechazo de permisos, una tarea fallida o la ausencia de tarea conservan la solicitud y el estado para reintentar.
+
+Al actualizar, las solicitudes en destrucción vuelven a intentarse. Con los permisos mostrados por el usuario, puede quedar la ISO privada: eliminarla requiere `Datastore.Allocate` en su almacenamiento, tanto para el usuario como para el token si usa separación de privilegios. El provider no modifica permisos automáticamente. El cambio se verifica con una API simulada; el borrado real queda pendiente del despliegue.
 
 ## Cambios de 4.1.8
 

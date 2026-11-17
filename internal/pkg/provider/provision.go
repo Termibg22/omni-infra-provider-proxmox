@@ -812,10 +812,11 @@ func (p *Provisioner) Deprovision(ctx context.Context, logger *zap.Logger, machi
 		return nil
 	}
 
-	if err := p.cleanupReplicationJobs(ctx, logger, machine.TypedSpec().Value.Vmid); err != nil {
-		return err
-	}
+	logger = logger.With(zap.Int32("vmid", machine.TypedSpec().Value.Vmid), zap.String("requestID", machineRequest.Metadata().ID()))
+	logger.Info("deprovisioning VM and its disks")
 
+	// HA must stop managing the VM before we stop it. The VM delete request
+	// purges replication/backup jobs without requiring separate cleanup APIs.
 	if err := p.ha.Deprovision(ctx, logger, machine); err != nil {
 		return err
 	}
@@ -841,7 +842,7 @@ func (p *Provisioner) Deprovision(ctx context.Context, logger *zap.Logger, machi
 		if found {
 			if _, err := p.getVM(ctx, node, machine.TypedSpec().Value.Vmid); err != nil {
 				if !isAlreadyGoneErr(err) {
-					return err
+					return fmt.Errorf("failed to locate VM %d on node %q for deletion: %w", machine.TypedSpec().Value.Vmid, node, err)
 				}
 
 				node, found, err = p.ha.FindVMNode(ctx, machine.TypedSpec().Value.Vmid)
@@ -1491,7 +1492,7 @@ func (p *Provisioner) destroyVM(ctx context.Context, logger *zap.Logger, node st
 			return nil
 		}
 
-		return err
+		return fmt.Errorf("failed to read VM %d on node %q for deletion: %w", vmid, node, err)
 	}
 
 	if vm.VirtualMachineConfig != nil && bool(vm.VirtualMachineConfig.Protection) {
@@ -1501,27 +1502,47 @@ func (p *Provisioner) destroyVM(ctx context.Context, logger *zap.Logger, node st
 		}
 
 		if cfgErr = p.waitForTaskToFinish(ctx, task); cfgErr != nil {
-			return cfgErr
+			return fmt.Errorf("failed to wait for VM %d protection removal on node %q: %w", vmid, node, cfgErr)
 		}
 	}
 
 	if !vm.IsStopped() {
 		task, stopErr := vm.Stop(ctx)
 		if stopErr != nil {
-			return stopErr
+			return fmt.Errorf("POST /nodes/%s/qemu/%d/status/stop (requires VM.PowerMgmt on /vms/%d): %w", node, vmid, vmid, stopErr)
 		}
 
 		if stopErr = p.waitForTaskToFinish(ctx, task); stopErr != nil {
-			return stopErr
+			return fmt.Errorf("failed to wait for VM %d to stop on node %q: %w", vmid, node, stopErr)
 		}
 	}
 
-	task, err := vm.Delete(ctx, nil)
-	if err != nil {
-		return err
+	// go-proxmox's VM.Delete first deletes the NoCloud ISO, requiring
+	// Datastore.Allocate. That optional cleanup must not block VM deletion.
+	p.cleanupVMCloudInitISO(ctx, logger, vm)
+
+	path := fmt.Sprintf("/nodes/%s/qemu/%d", node, vmid)
+	options := &proxmox.VirtualMachineDeleteOptions{Purge: true, DestroyUnreferencedDisks: true}
+
+	var upid proxmox.UPID
+
+	logger.Info("deleting VM and all owned disks", zap.String("node", node), zap.Int32("vmid", vmid))
+
+	if err := p.proxmoxClient.DeleteWithParams(ctx, path, options, &upid); err != nil {
+		return fmt.Errorf("DELETE %s (requires VM.Allocate on /vms/%d): %w", path, vmid, err)
 	}
 
-	return p.waitForTaskToFinish(ctx, task)
+	if upid == "" {
+		return fmt.Errorf("DELETE %s returned no task; cannot verify VM and disk deletion", path)
+	}
+
+	if err := p.waitForTaskToFinish(ctx, proxmox.NewTask(upid, p.proxmoxClient)); err != nil {
+		return fmt.Errorf("failed to wait for VM %d and disk deletion on node %q: %w", vmid, node, err)
+	}
+
+	logger.Info("deleted VM and its owned disks", zap.String("node", node), zap.Int32("vmid", vmid))
+
+	return nil
 }
 
 // taskPollInterval is how often waitForTaskToFinish polls a task, tests shorten it.
