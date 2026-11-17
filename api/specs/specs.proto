@@ -21,4 +21,6 @@ message MachineSpec {
   bool ha_registered = 13;
   int32 start_attempts = 14;
   string failure = 15;
+  // Last successfully applied ProviderData, used to validate live updates.
+  string applied_provider_data = 16;
 }

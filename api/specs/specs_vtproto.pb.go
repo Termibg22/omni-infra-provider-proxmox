@@ -38,6 +38,7 @@ func (m *MachineSpec) CloneVT() *MachineSpec {
 	r.HaRegistered = m.HaRegistered
 	r.StartAttempts = m.StartAttempts
 	r.Failure = m.Failure
+	r.AppliedProviderData = m.AppliedProviderData
 	if len(m.unknownFields) > 0 {
 		r.unknownFields = make([]byte, len(m.unknownFields))
 		copy(r.unknownFields, m.unknownFields)
@@ -94,6 +95,9 @@ func (this *MachineSpec) EqualVT(that *MachineSpec) bool {
 	if this.Failure != that.Failure {
 		return false
 	}
+	if this.AppliedProviderData != that.AppliedProviderData {
+		return false
+	}
 	return string(this.unknownFields) == string(that.unknownFields)
 }
 
@@ -104,6 +108,7 @@ func (this *MachineSpec) EqualMessageVT(thatMsg proto.Message) bool {
 	}
 	return this.EqualVT(that)
 }
+
 func (m *MachineSpec) MarshalVT() (dAtA []byte, err error) {
 	if m == nil {
 		return nil, nil
@@ -133,6 +138,15 @@ func (m *MachineSpec) MarshalToSizedBufferVT(dAtA []byte) (int, error) {
 	if m.unknownFields != nil {
 		i -= len(m.unknownFields)
 		copy(dAtA[i:], m.unknownFields)
+	}
+	if len(m.AppliedProviderData) > 0 {
+		i -= len(m.AppliedProviderData)
+		copy(dAtA[i:], m.AppliedProviderData)
+		i = protohelpers.EncodeVarint(dAtA, i, uint64(len(m.AppliedProviderData)))
+		i--
+		dAtA[i] = 0x1
+		i--
+		dAtA[i] = 0x82
 	}
 	if len(m.Failure) > 0 {
 		i -= len(m.Failure)
@@ -281,6 +295,10 @@ func (m *MachineSpec) SizeVT() (n int) {
 	l = len(m.Failure)
 	if l > 0 {
 		n += 1 + l + protohelpers.SizeOfVarint(uint64(l))
+	}
+	l = len(m.AppliedProviderData)
+	if l > 0 {
+		n += 2 + l + protohelpers.SizeOfVarint(uint64(l))
 	}
 	n += len(m.unknownFields)
 	return n
@@ -692,6 +710,38 @@ func (m *MachineSpec) UnmarshalVT(dAtA []byte) error {
 				return io.ErrUnexpectedEOF
 			}
 			m.Failure = string(dAtA[iNdEx:postIndex])
+			iNdEx = postIndex
+		case 16:
+			if wireType != 2 {
+				return fmt.Errorf("proto: wrong wireType = %d for field AppliedProviderData", wireType)
+			}
+			var stringLen uint64
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return protohelpers.ErrIntOverflow
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				stringLen |= uint64(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+			intStringLen := int(stringLen)
+			if intStringLen < 0 {
+				return protohelpers.ErrInvalidLength
+			}
+			postIndex := iNdEx + intStringLen
+			if postIndex < 0 {
+				return protohelpers.ErrInvalidLength
+			}
+			if postIndex > l {
+				return io.ErrUnexpectedEOF
+			}
+			m.AppliedProviderData = string(dAtA[iNdEx:postIndex])
 			iNdEx = postIndex
 		default:
 			iNdEx = preIndex

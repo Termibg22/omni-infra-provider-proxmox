@@ -40,8 +40,10 @@ type MachineSpec struct {
 	HaRegistered     bool                   `protobuf:"varint,13,opt,name=ha_registered,json=haRegistered,proto3" json:"ha_registered,omitempty"`
 	StartAttempts    int32                  `protobuf:"varint,14,opt,name=start_attempts,json=startAttempts,proto3" json:"start_attempts,omitempty"`
 	Failure          string                 `protobuf:"bytes,15,opt,name=failure,proto3" json:"failure,omitempty"`
-	unknownFields    protoimpl.UnknownFields
-	sizeCache        protoimpl.SizeCache
+	// Last successfully applied ProviderData, used to validate live updates.
+	AppliedProviderData string `protobuf:"bytes,16,opt,name=applied_provider_data,json=appliedProviderData,proto3" json:"applied_provider_data,omitempty"`
+	unknownFields       protoimpl.UnknownFields
+	sizeCache           protoimpl.SizeCache
 }
 
 func (x *MachineSpec) Reset() {
@@ -165,11 +167,18 @@ func (x *MachineSpec) GetFailure() string {
 	return ""
 }
 
+func (x *MachineSpec) GetAppliedProviderData() string {
+	if x != nil {
+		return x.AppliedProviderData
+	}
+	return ""
+}
+
 var File_specs_specs_proto protoreflect.FileDescriptor
 
 const file_specs_specs_proto_rawDesc = "" +
 	"\n" +
-	"\x11specs/specs.proto\x12\bemuspecs\x1a\x1fgoogle/protobuf/timestamp.proto\x1a\x1egoogle/protobuf/duration.proto\"\x9b\x03\n" +
+	"\x11specs/specs.proto\x12\bemuspecs\x1a\x1fgoogle/protobuf/timestamp.proto\x1a\x1egoogle/protobuf/duration.proto\"\xcf\x03\n" +
 	"\vMachineSpec\x12\x12\n" +
 	"\x04uuid\x18\x01 \x01(\tR\x04uuid\x12\x1c\n" +
 	"\tschematic\x18\x02 \x01(\tR\tschematic\x12#\n" +
@@ -183,7 +192,8 @@ const file_specs_specs_proto_rawDesc = "" +
 	"\x04pool\x18\f \x01(\tR\x04pool\x12#\n" +
 	"\rha_registered\x18\r \x01(\bR\fhaRegistered\x12%\n" +
 	"\x0estart_attempts\x18\x0e \x01(\x05R\rstartAttempts\x12\x18\n" +
-	"\afailure\x18\x0f \x01(\tR\afailureB=Z;github.com/siderolabs/omni-infra-provider-proxmox/api/specsb\x06proto3"
+	"\afailure\x18\x0f \x01(\tR\afailure\x122\n" +
+	"\x15applied_provider_data\x18\x10 \x01(\tR\x13appliedProviderDataB=Z;github.com/siderolabs/omni-infra-provider-proxmox/api/specsb\x06proto3"
 
 var (
 	file_specs_specs_proto_rawDescOnce sync.Once
@@ -197,10 +207,13 @@ func file_specs_specs_proto_rawDescGZIP() []byte {
 	return file_specs_specs_proto_rawDescData
 }
 
-var file_specs_specs_proto_msgTypes = make([]protoimpl.MessageInfo, 1)
-var file_specs_specs_proto_goTypes = []any{
-	(*MachineSpec)(nil), // 0: emuspecs.MachineSpec
-}
+var (
+	file_specs_specs_proto_msgTypes = make([]protoimpl.MessageInfo, 1)
+	file_specs_specs_proto_goTypes  = []any{
+		(*MachineSpec)(nil), // 0: emuspecs.MachineSpec
+	}
+)
+
 var file_specs_specs_proto_depIdxs = []int32{
 	0, // [0:0] is the sub-list for method output_type
 	0, // [0:0] is the sub-list for method input_type

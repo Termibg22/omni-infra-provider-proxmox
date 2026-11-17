@@ -131,11 +131,10 @@ func reconcileSingleProvisionedRequest(
 	// Adopt legacy machines without changing their hardware on first observation.
 	if currentHash == "" {
 		_, err = safe.StateUpdateWithConflicts(ctx, st, machine.Metadata(), func(m *resources.Machine) error {
-			m.Metadata().Annotations().Set(providerDataHashAnnotation, desiredHash)
-			m.Metadata().Annotations().Set(appliedProviderDataAnnotation, req.TypedSpec().Value.ProviderData)
+			recordAppliedProviderData(m, req.TypedSpec().Value.ProviderData)
 
 			return nil
-		})
+		}, state.WithUpdateOwner(machine.Metadata().Owner()))
 		if err != nil {
 			logger.Warn("failed to record initial provider data", zap.Error(err))
 		}
@@ -157,11 +156,10 @@ func reconcileSingleProvisionedRequest(
 		m.TypedSpec().Value.Node = machine.TypedSpec().Value.Node
 		m.TypedSpec().Value.Pool = machine.TypedSpec().Value.Pool
 		m.TypedSpec().Value.HaRegistered = machine.TypedSpec().Value.HaRegistered
-		m.Metadata().Annotations().Set(providerDataHashAnnotation, desiredHash)
-		m.Metadata().Annotations().Set(appliedProviderDataAnnotation, req.TypedSpec().Value.ProviderData)
+		recordAppliedProviderData(m, req.TypedSpec().Value.ProviderData)
 
 		return nil
-	})
+	}, state.WithUpdateOwner(machine.Metadata().Owner()))
 	if err != nil {
 		logger.Warn("failed to persist reconciled machine state", zap.String("requestID", reqID), zap.Error(err))
 	}
@@ -210,7 +208,7 @@ func (p *Provisioner) ReconcileExistingMachine(
 
 	data.ApplyWorkloadProfile()
 
-	if previous, ok := machine.Metadata().Annotations().Get(appliedProviderDataAnnotation); ok {
+	if previous, ok := appliedProviderData(machine); ok {
 		if err := validateLiveUpdate(previous, data); err != nil {
 			return err
 		}

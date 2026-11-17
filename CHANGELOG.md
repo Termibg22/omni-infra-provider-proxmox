@@ -1,3 +1,10 @@
+## [Omni Infra Provider Proxmox 4.1.8](https://github.com/Termibg22/omni-infra-provider-proxmox/tree/v4.1.8)
+
+- Fix provisioning failing at `recordProviderData` after the VM has started: store applied configuration in the provider's Machine spec, since Omni rejects multiline YAML in annotations.
+- Use the same storage for existing-machine adoption and live updates, preserve the resource owner when writing state, and retain reads of legacy annotations for update validation.
+- Verify recovery from the failed provisioning checkpoint through the Omni SDK controller without creating or restarting VMs. Cover Omni metadata validation, long configurations, explicit false values, protobuf persistence and live-update state writes.
+- Retain the editor keepalive and PCI/USB discovery from previous releases; no Omni changes are required.
+
 ## [Omni Infra Provider Proxmox 4.1.7](https://github.com/Termibg22/omni-infra-provider-proxmox/tree/v4.1.7)
 
 - Emit a provider metadata heartbeat every 30 seconds to mitigate idle browser connection closures that reset unsaved Machine Class edits in hosted Omni.

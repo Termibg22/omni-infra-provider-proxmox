@@ -1,6 +1,15 @@
-# Correcciones del editor e inventario: 4.1.7
+# Correcciones del provider: 4.1.8
 
 La solución modifica exclusivamente el proveedor. No incluye parches, extensiones de navegador ni cambios al Omni alojado.
+
+## Cambios de 4.1.8
+
+- Se reproduce el error de los logs en `recordProviderData`: la VM ya está arrancada, pero guardar el YAML aplicado como anotación falla por sus saltos de línea. La prueba utiliza la validación real de metadatos del SDK de Omni.
+- La configuración aplicada pasa a `MachineSpec.applied_provider_data`, en el recurso propio del provider. Solo su hash queda en una anotación. Se corrigen las tres escrituras: aprovisionamiento, adopción de máquinas antiguas y actualización de VMs existentes.
+- Se conservan las lecturas de anotaciones antiguas y las comprobaciones que rechazan cambios incompatibles en VMs existentes. Las escrituras de actualización respetan el propietario del recurso, evitando conflictos con el controlador de aprovisionamiento.
+- Se prueba el controlador del SDK desde el estado `FAILED` y el checkpoint `syncHARules`: llega a `PROVISIONED`, borra el error y conserva VMID, nodo y tarea de arranque sin acceder a Proxmox. También se comprueban YAML largo, valores false explícitos, configuraciones agrupadas y persistencia protobuf.
+
+Para recuperar solicitudes detenidas por este error, actualizar y reiniciar el provider conservando las solicitudes y las VMs existentes. La recuperación se ha verificado en pruebas; no se ha desplegado esta versión en el clúster real durante la corrección.
 
 ## Cambios de 4.1.7
 

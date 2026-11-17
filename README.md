@@ -33,12 +33,14 @@ Despite its historical name, `OMNI_SERVICE_ACCOUNT_KEY` must contain an **infras
 docker run -d --name omni-proxmox --restart unless-stopped \
   --mount type=bind,source="$(pwd)/config.yaml",target=/config.yaml,readonly \
   -e OMNI_ENDPOINT -e OMNI_SERVICE_ACCOUNT_KEY \
-  ghcr.io/termibg22/omni-infra-provider-proxmox:v4.1.7 \
+  ghcr.io/termibg22/omni-infra-provider-proxmox:v4.1.8 \
   --config-file /config.yaml
 ```
 
-`v4.1.7` adds an editor keepalive to mitigate idle connection resets that discard unsaved changes in hosted Omni. It retains physical PCI/USB discovery and works with unmodified Omni.
+`v4.1.8` fixes provisioning failing at `recordProviderData` with `annotation value ... must not contain control characters`. It retains the editor keepalive and physical PCI/USB discovery, and works with unmodified Omni.
 Do not use `latest` to pin a production deployment.
+
+If requests are stuck at that step, update and restart the provider while keeping the existing requests and VMs. The SDK resumes from the saved checkpoint (`syncHARules`) and records the applied configuration; it does not repeat VM creation or startup. This recovery path is covered by a controller regression test. The configuration now lives in the provider's Machine spec instead of an annotation, avoiding both control-character restrictions and the 16 KiB annotation limit. Older applied-data annotations remain readable for live-update validation.
 
 ## Create a Machine Class
 
@@ -96,7 +98,7 @@ spec:
 
 Apply it with `omnictl apply -f machine-class.yaml`, then select the class when configuring a cluster's machine sets.
 
-## Form compatibility and updates (v4.1.7)
+## Form compatibility and updates (v4.1.8)
 
 Both schema modes show the same streamlined VM form. `--schema-mode` remains accepted for compatibility.
 The hosted Omni renderer generates its own layout and ignores provider-supplied tabs. It does not apply field defaults when opening the form, but does apply item-property defaults when adding an array item.
@@ -223,6 +225,20 @@ The template must already contain the intended Talos version, firmware, and exte
 The configured boot bus must match the template.
 Disk resizing grows the boot disk when needed; retries preserve existing disk volumes.
 Selecting `iso` or clearing Provisioning Mode ignores saved template/clone settings without deleting them. For backward compatibility, YAML that omits `provisioning_mode` entirely and specifies `template_vmid` still clones. Changing the effective mode on an existing VM requires reprovisioning.
+
+## Scheduling workloads on control planes
+
+For Talos configurations using `KubeNodeConfig` (the default for new Talos 1.14+ configurations), add this Omni configuration patch to the control-plane machine set:
+
+```yaml
+apiVersion: v1alpha1
+kind: KubeNodeConfig
+taints:
+  node-role.kubernetes.io/control-plane:
+    $patch: delete
+```
+
+This removes the control-plane `NoSchedule` taint, allowing application pods to share those nodes with Kubernetes control-plane components. It does not force workloads onto them. Remove the old `cluster.allowSchedulingOnControlPlanes` setting from your patches when using this format: defining both causes `.cluster.allowSchedulingOnControlPlanes is already set in v1alpha1 config`. The provider does not set either option automatically. See the [Talos configuration guide](https://docs.siderolabs.com/talos/v1.14/deploy-and-manage-workloads/workloads-on-controlplane).
 
 ## Build and verify
 

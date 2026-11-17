@@ -14,8 +14,6 @@ import (
 	"go.yaml.in/yaml/v4"
 )
 
-const appliedProviderDataAnnotation = "proxmox.omni.siderolabs.io/applied-provider-data"
-
 // Reject changes which cannot be applied to a running Talos guest instead of
 // recording a successful hash after silently ignoring them.
 func validateLiveUpdate(previous string, desired Data) error {

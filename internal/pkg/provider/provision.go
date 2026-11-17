@@ -783,7 +783,7 @@ hostname: %s`,
 		provision.NewStep("registerHA", p.registerHAStep),
 		provision.NewStep("syncHARules", p.syncHARulesStep),
 		provision.NewStep("recordProviderData", func(_ context.Context, _ *zap.Logger, pctx provision.Context[*resources.Machine]) error {
-			var raw map[string]any
+			var raw any
 			if err := pctx.UnmarshalProviderData(&raw); err != nil {
 				return err
 			}
@@ -793,8 +793,7 @@ hostname: %s`,
 				return err
 			}
 
-			pctx.State.Metadata().Annotations().Set(providerDataHashAnnotation, hashProviderData(string(encoded)))
-			pctx.State.Metadata().Annotations().Set(appliedProviderDataAnnotation, string(encoded))
+			recordAppliedProviderData(pctx.State, string(encoded))
 
 			return nil
 		}),
