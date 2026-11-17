@@ -44,16 +44,26 @@ func setHardwareMappingOptions(props map[string]any, field string, values []stri
 	}
 
 	if len(values) == 0 {
-		mapping["description"] = "No mappings on current nodes were discovered. Configure mappings in Proxmox Datacenter > Resource Mappings, " +
-			"ensure the provider can read them, then restart the provider. Remove this device if unused."
+		mapping["description"] = "No devices or mappings were discovered. Check the provider logs and Proxmox inventory permissions " +
+			"(PCI: Sys.Audit or Sys.Modify on /; USB: Sys.Modify on /). Resource Mappings also require Mapping.Use or Mapping.Audit. " +
+			"Restart the provider after inventory or permission changes. Remove this entry if unused."
 
 		return
 	}
 
-	details := []string{"Select a Proxmox resource mapping. All selected devices must be available on the same node within Target Node / Node Group. " +
+	details := []string{"Select a named Resource Mapping or a physical device shown as node/address (name). " +
+		"All selected devices must be available on the same node within Target Node / Node Group. " +
 		"Clear to choose another mapping, or remove an unused device."}
 
+	hasPhysical := false
+
 	for _, value := range values {
+		if _, physical := parsePhysicalDevice(value); physical {
+			hasPhysical = true
+
+			continue
+		}
+
 		var nodes []string
 
 		for _, node := range opts.Nodes {
@@ -65,6 +75,11 @@ func setHardwareMappingOptions(props map[string]any, field string, values []stri
 		if len(nodes) > 0 {
 			details = append(details, fmt.Sprintf("%s: %s.", value, strings.Join(nodes, ", ")))
 		}
+	}
+
+	if hasPhysical {
+		details = append(details, "Physical devices stay on the named node. Proxmox requires root@pam password authentication for direct passthrough; "+
+			"API tokens must select a Resource Mapping instead.")
 	}
 
 	mapping["description"] = strings.Join(details, " ")

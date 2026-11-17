@@ -161,10 +161,14 @@ func (p *Provisioner) filterNodesByGroupAndTopology(
 }
 
 func (p *Provisioner) filterNodesWithHardwareMappings(ctx context.Context, candidates proxmox.NodeStatuses, data Data) (proxmox.NodeStatuses, error) {
+	if err := data.validateHardware(); err != nil {
+		return nil, err
+	}
+
 	cluster := new(proxmox.Cluster).New(p.proxmoxClient)
 	allowedByMapping := make(map[string][]string)
 
-	if len(data.PCIDevices) > 0 {
+	if data.usesResourceMappings("pci") {
 		pciMappings, err := cluster.PCIMappings(ctx, "")
 		if err != nil {
 			return nil, fmt.Errorf("cannot read Proxmox PCI resource mappings: %w", err)
@@ -177,7 +181,7 @@ func (p *Provisioner) filterNodesWithHardwareMappings(ctx context.Context, candi
 		}
 	}
 
-	if len(data.USBDevices) > 0 {
+	if data.usesResourceMappings("usb") {
 		usbMappings, err := cluster.USBMappings(ctx, "")
 		if err != nil {
 			return nil, fmt.Errorf("cannot read Proxmox USB resource mappings: %w", err)
@@ -188,6 +192,10 @@ func (p *Provisioner) filterNodesWithHardwareMappings(ctx context.Context, candi
 				allowedByMapping["usb:"+m.ID] = extractNodesFromMappingEntries(m.Map)
 			}
 		}
+	}
+
+	if err := p.addPhysicalDeviceNodes(ctx, candidates, data, allowedByMapping); err != nil {
+		return nil, err
 	}
 
 	if len(allowedByMapping) == 0 {
@@ -326,6 +334,10 @@ func (p *Provisioner) applyClonedVMConfigAndResize(
 	vm *proxmox.VirtualMachine,
 	data Data,
 ) error {
+	if err := p.validatePhysicalDevicesOnNode(ctx, vm.Node, data); err != nil {
+		return err
+	}
+
 	onBoot := 1
 	if data.OnBoot != nil && !*data.OnBoot {
 		onBoot = 0

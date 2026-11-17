@@ -417,6 +417,10 @@ func (p *Provisioner) ProvisionSteps() []provision.Step[*resources.Machine] {
 				return err
 			}
 
+			if hardwareErr := p.validatePhysicalDevicesOnNode(ctx, node.Name, data); hardwareErr != nil {
+				return hardwareErr
+			}
+
 			cluster, err := p.proxmoxClient.Cluster(ctx)
 			if err != nil {
 				return err
@@ -1162,7 +1166,7 @@ func buildUSBDeviceOptions(devices []USBDevice) []proxmox.VirtualMachineOption {
 	options := make([]proxmox.VirtualMachineOption, 0, len(devices))
 
 	for i, device := range devices {
-		parts := []string{fmt.Sprintf("mapping=%s", device.Mapping)}
+		parts := []string{hardwareOption(device.Mapping)}
 		if device.USB3 {
 			parts = append(parts, "usb3=1")
 		}

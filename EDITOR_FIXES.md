@@ -1,6 +1,19 @@
-# Correcciones del editor e inventario: 4.1.5
+# Correcciones del editor e inventario: 4.1.6
 
 La solución modifica exclusivamente el proveedor. No incluye parches, extensiones de navegador ni cambios al Omni alojado.
+
+## Cambios de 4.1.6
+
+- Se comprobó que los dos selectores publicados en el Omni real solo ofrecían la fila vacía. El proveedor consultaba Resource Mappings, pero no el inventario físico de los nodos; no se afirma que el clúster carezca de mappings, porque la API también puede filtrarlos por permisos.
+- PCI Device y USB Device incorporan el inventario `/nodes/{node}/hardware/pci` y `/hardware/usb`, con nombre, nodo y dirección en cada opción. Se mantienen los IDs de mappings existentes y la posibilidad de vaciar la selección.
+- USB usa bus + ruta física del puerto. Se omiten hubs, dispositivos sin producto y entradas sin puerto válido. Si falta el nombre, se muestra fabricante/producto por ID.
+- La selección física conserva el campo YAML `mapping` por compatibilidad con clases editadas en Omni, con valor `nodo/dirección (nombre)`. El proveedor extrae nodo y dirección y envía `host=...` a Proxmox. Un mapping con nombre sigue enviándose como `mapping=...`.
+- Se comprueba que todos los dispositivos puedan estar en el mismo nodo, se rechazan duplicados y se revalida el inventario antes de crear o actualizar una VM. La descripción visible no determina la dirección física.
+- Se retira Resource Affinity (PVE 9+) del formulario. Los valores antiguos se conservan al abrir y guardar.
+
+El passthrough físico directo tiene una limitación de Proxmox: solo acepta autenticación root@pam con contraseña. Un token API debe utilizar Resource Mappings. El proveedor no crea mappings ni modifica permisos automáticamente. Los permisos de lectura del inventario y estas diferencias están explicados en las ayudas y en README.
+
+La lista sigue siendo global porque el editor no admite filtrar sus opciones según otros controles. Cada dispositivo físico identifica su nodo y el esquema valida Target Node / Node Group, sin borrar una selección incompatible.
 
 ## Cambios de 4.1.5
 
@@ -57,7 +70,7 @@ El YAML agrupado de v4 sigue siendo válido en el backend, pero sus valores solo
 - Pruebas Go de inventario con un nodo eliminado aún presente en recursos agregados, almacenamiento, grupos y mapeos.
 - API simulada con un destino válido, uno `rootdir`, uno deshabilitado y otro inactivo.
 - Detector de carreras, `go vet`, lint completo y compilación Linux amd64/arm64.
-- Diez pruebas de compatibilidad con el renderizador original de Omni v1.13.3, commit `1834114db70c2bbfff71cd4ba8a1882a01504193`, sin modificar sus componentes: datos antiguos conservados, formulario nuevo sin NaN, edición durante actualización de esquema, selectores vaciables, campos eliminados y títulos cortos, opciones PCI/USB y validación de combinaciones de nodo/grupo/mappings, creación y edición de discos, valores predeterminados y cambios de modo de aprovisionamiento.
+- Once pruebas de compatibilidad con el renderizador original de Omni v1.13.3, commit `1834114db70c2bbfff71cd4ba8a1882a01504193`, sin modificar sus componentes: datos antiguos conservados, formulario nuevo sin NaN, edición durante actualización de esquema, selectores vaciables, campos eliminados y títulos cortos, opciones PCI/USB físicas y mappings, persistencia de sus etiquetas, validación de combinaciones de nodo/grupo/dispositivos, creación y edición de discos, valores predeterminados y cambios de modo de aprovisionamiento.
 - Prueba visual local usando ese editor original y datos sintéticos; no se modificó ninguna clase ni VM real.
 
 Para repetir las pruebas, generar desde la raíz del proveedor un esquema sintético con `go run hack/test/omni-ui/schema_fixture.go > /tmp/provider-schema.json`. En un checkout de Omni de esa revisión con sus dependencias de frontend instaladas, copiar `hack/test/omni-ui/provider-schema.spec.ts` a `frontend/src/components/Form/ProviderSchema.spec.ts` y ejecutar desde `frontend`:

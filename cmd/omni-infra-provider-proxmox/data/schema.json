@@ -1116,30 +1116,6 @@
           "title": "Failback",
           "default": true
         },
-        "resource_affinity": {
-          "type": "string",
-          "title": "Resource Affinity (PVE 9+)",
-          "default": "none",
-          "oneOf": [
-            {
-              "const": "",
-              "title": " "
-            },
-            {
-              "const": "none",
-              "title": "none"
-            },
-            {
-              "const": "negative",
-              "title": "negative"
-            },
-            {
-              "const": "positive",
-              "title": "positive"
-            }
-          ],
-          "description": "Select the empty first row to clear this selection."
-        },
         "node_affinity_nodes": {
           "type": "array",
           "title": "Node Affinity Nodes (PVE 9+)",
@@ -1182,9 +1158,9 @@
         "properties": {
           "mapping": {
             "type": "string",
-            "title": "PCI Mapping",
+            "title": "PCI Device",
             "minLength": 1,
-            "description": "A mapping is required for each device. Clear the selection to choose another mapping, or remove this device if it is no longer needed.",
+            "description": "Select a physical device or Resource Mapping. Clear the selection to choose another device, or remove this entry if unused.",
             "default": "",
             "oneOf": [
               {
@@ -1228,9 +1204,9 @@
         "properties": {
           "mapping": {
             "type": "string",
-            "title": "USB Mapping",
+            "title": "USB Device",
             "minLength": 1,
-            "description": "A mapping is required for each device. Clear the selection to choose another mapping, or remove this device if it is no longer needed.",
+            "description": "Select a physical device or Resource Mapping. Physical USB choices identify a port on a specific node. Clear the selection to choose another device, or remove this entry if unused.",
             "default": "",
             "oneOf": [
               {

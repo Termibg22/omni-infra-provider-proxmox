@@ -49,6 +49,10 @@ func (d *Data) Validate() error {
 		return err
 	}
 
+	if err := d.validateHardware(); err != nil {
+		return err
+	}
+
 	return d.validateNetwork()
 }
 

@@ -645,18 +645,18 @@ type NIC struct {
 	Queues        int      `yaml:"queues,omitempty"`
 }
 
-// PCIDevice represents a PCI device passthrough configuration using Proxmox Resource Mappings.
+// PCIDevice represents a resource mapping or a node/address physical PCI selection.
 type PCIDevice struct {
 	ROMBar     *bool  `yaml:"rombar,omitempty"`      // Enable ROM BAR (default true, set false to disable)
-	Mapping    string `yaml:"mapping"`               // Resource mapping name (e.g., nvidia-gpu-1)
+	Mapping    string `yaml:"mapping"`               // Resource mapping ID or node/address (device name).
 	MDev       string `yaml:"mdev"`                  // Mediated device name (e.g., nvidia-180)
 	PCIExpress bool   `yaml:"pcie,omitempty"`        // Use PCIe instead of PCI (recommended for GPUs)
 	PrimaryGPU bool   `yaml:"primary_gpu,omitempty"` // Set as primary GPU (x-vga=1)
 }
 
-// USBDevice represents a USB device passthrough configuration using Proxmox Resource Mappings.
+// USBDevice represents a resource mapping or a node/port physical USB selection.
 type USBDevice struct {
-	Mapping string `yaml:"mapping"`        // Resource mapping name (e.g., rtl-sdr)
+	Mapping string `yaml:"mapping"`        // Resource mapping ID or node/port (device name).
 	USB3    bool   `yaml:"usb3,omitempty"` // Use the USB 3 controller
 }
 

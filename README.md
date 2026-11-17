@@ -33,11 +33,11 @@ Despite its historical name, `OMNI_SERVICE_ACCOUNT_KEY` must contain an **infras
 docker run -d --name omni-proxmox --restart unless-stopped \
   --mount type=bind,source="$(pwd)/config.yaml",target=/config.yaml,readonly \
   -e OMNI_ENDPOINT -e OMNI_SERVICE_ACCOUNT_KEY \
-  ghcr.io/termibg22/omni-infra-provider-proxmox:v4.1.5 \
+  ghcr.io/termibg22/omni-infra-provider-proxmox:v4.1.6 \
   --config-file /config.yaml
 ```
 
-`v4.1.5` initializes additional disks at 20 GiB and respects an explicit ISO or cleared provisioning mode even when a template is saved. It works with unmodified Omni.
+`v4.1.6` lists physical PCI/USB devices alongside Resource Mappings and removes Resource Affinity from the form. It works with unmodified Omni.
 Do not use `latest` to pin a production deployment.
 
 ## Create a Machine Class
@@ -96,13 +96,13 @@ spec:
 
 Apply it with `omnictl apply -f machine-class.yaml`, then select the class when configuring a cluster's machine sets.
 
-## Form compatibility and updates (v4.1.5)
+## Form compatibility and updates (v4.1.6)
 
 Both schema modes show the same streamlined VM form. `--schema-mode` remains accepted for compatibility.
 The hosted Omni renderer generates its own layout and ignores provider-supplied tabs. It does not apply field defaults when opening the form, but does apply item-property defaults when adding an array item.
 Boot Disk and Primary NIC have separate headings. Cores, Memory and Size use short labels; units and defaults are in their help text.
 Every dropdown offers an empty first row to clear a selection; `auto` is no longer a visible option.
-Workload profiles, network bonds, CEL storage expressions, complete-device overrides, VM Firewall Options and ZFS Storage Replication are no longer shown in the form. Existing YAML using these fields remains supported.
+Workload profiles, network bonds, CEL storage expressions, complete-device overrides, VM Firewall Options, ZFS Storage Replication and Resource Affinity are no longer shown in the form. Existing YAML using these fields remains supported.
 Storage is the only storage selector in the form. Choosing it takes precedence over a previously saved CEL rule; leaving it empty preserves that rule when one exists.
 The current Omni renderer cannot collapse provider-defined sections.
 Blank placement fields mean `auto`; omitted or zero CPU/RAM values use 2 cores and 4096 MiB. Saved nonzero values are displayed directly.
@@ -114,9 +114,11 @@ Node choices come from the current `/nodes` inventory. Disk destinations require
 A `rootdir`-only storage supports containers, not VM disks, and is excluded. Stale references in config, HA or mappings do not create selectable nodes.
 Dropdown choices are discovered and published once when the provider starts. Restart it to reflect topology changes; actual provisioning still checks current nodes and storage.
 The periodic schema publisher has been removed, including when an older deployment still passes `--schema-refresh-interval`.
-PCI/USB choices contain resource mappings associated with current nodes, with compatible nodes listed in the field help. Hardware is never preselected when adding a device.
+PCI Device and USB Device list named Resource Mappings plus physical devices discovered on current online nodes. Physical choices show `node/address (device name)`, with a vendor/product ID fallback when the API does not report a name. USB hubs and entries without a usable port are excluded; USB addresses use the bus and topology path, not the transient device number. Hardware is never preselected when adding a device.
 Omni does not filter the visible choices when Target Node or Node Group changes. Conditional schema validation checks that the selected placement can provide every requested device on one common node; provisioning checks the current Proxmox API again.
 Empty mapping lists can mean no mappings exist or the token cannot see them. Configure them in Proxmox Datacenter > Resource Mappings and grant the appropriate mapping permissions; see the [PCI API](https://github.com/proxmox/pve-manager/blob/master/PVE/API2/Cluster/Mapping/PCI.pm) and [USB API](https://github.com/proxmox/pve-manager/blob/master/PVE/API2/Cluster/Mapping/USB.pm). Restart the provider after changing the inventory or permissions.
+Physical inventory requires `Sys.Audit` or `Sys.Modify` on `/` for [PCI](https://github.com/proxmox/pve-manager/blob/master/PVE/API2/Hardware/PCI.pm), and `Sys.Modify` on `/` for [USB](https://github.com/proxmox/pve-manager/blob/master/PVE/API2/Hardware/USB.pm). Inventory failures are logged per node and device type without hiding successfully discovered mappings or other device types.
+Proxmox allows direct physical passthrough only with `root@pam` password authentication; API tokens must use a Resource Mapping, as enforced by its [VM permission checks](https://github.com/proxmox/qemu-server/blob/master/src/PVE/API2/Qemu.pm). The provider does not create mappings or change permissions automatically. Physical selections pin placement to their named node and are checked again before VM creation or updates; the schema also rejects combinations spanning different nodes.
 
 Browser reloads and watch reconnections can discard unsaved changes in hosted Omni. The original Machine Class editor reloads its form when the watched class arrives again.
 Simultaneous network errors were observed across class, metrics, notification and provider streams; removing provider schema polling cannot prevent these independent SaaS/browser connection resets.
@@ -200,7 +202,7 @@ usb_devices:
 
 HA affinity rules require Proxmox VE 9+.
 Storage replication requires suitable ZFS storage and another eligible node.
-PCI/USB mappings must exist on every eligible node; provisioning fails if no candidate provides all requested mappings.
+Provisioning requires one candidate node that provides every selected PCI/USB device or mapping.
 Use `bios: ovmf` when requesting `secure_boot: true`.
 
 ### Clone a template

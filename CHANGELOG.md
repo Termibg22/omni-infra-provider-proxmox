@@ -1,3 +1,11 @@
+## [Omni Infra Provider Proxmox 4.1.6](https://github.com/Termibg22/omni-infra-provider-proxmox/tree/v4.1.6)
+
+- Populate PCI/USB selectors from per-node hardware inventory as well as cluster Resource Mappings; display device names, nodes and addresses.
+- Use stable USB port paths and exclude hubs and incomplete entries. Preserve named mappings when physical inventory is unavailable.
+- Support node-bound physical passthrough with host options; validate placement, duplicates, live inventory and target-node compatibility before applying changes.
+- Remove Resource Affinity from the form while retaining existing YAML data.
+- Verify device discovery through simulated Proxmox APIs and selection, clearing and remounting with the original Omni renderer. Document inventory permissions and Proxmox's root-only direct-passthrough restriction.
+
 ## [Omni Infra Provider Proxmox 4.1.5](https://github.com/Termibg22/omni-infra-provider-proxmox/tree/v4.1.5)
 
 - Initialize each new Additional Disk with a 20 GiB size in stock Omni; accept omitted, null and zero sizes as the same backend default.

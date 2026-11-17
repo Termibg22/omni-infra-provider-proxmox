@@ -60,6 +60,75 @@ function editor(input: Record<string, unknown>) {
   return { model, jsonSchema, unmount: rendered.unmount };
 }
 
+test("physical PCI and USB devices show names and nodes, persist after remount and remain clearable", async () => {
+  const first = editor({ node: "pve1" });
+  await flushPromises();
+  const selections = [
+    [
+      "PCI / GPU Devices",
+      "pci_devices",
+      "pve1/0000:01:00.0 (NVIDIA GeForce RTX 4090)",
+      "gpu-one",
+    ],
+    [
+      "USB Devices",
+      "usb_devices",
+      "pve1/1-2.3 (Silicon Labs CP210x)",
+      "usb-one",
+    ],
+  ];
+  for (const [section, field, physical, mapping] of selections) {
+    const group = within(
+      screen.getByText(section, { exact: true }).parentElement!,
+    );
+    await fireEvent.click(
+      group.getByRole("button", { name: "Add", exact: true }),
+    );
+    await flushPromises();
+    expect(first.model.value[field]).toEqual([
+      expect.objectContaining({ mapping: "" }),
+    ]);
+    await fireEvent.keyDown(group.getByRole("combobox"), { key: "ArrowDown" });
+    expect(
+      await screen.findByRole("option", { name: mapping, exact: true }),
+    ).toBeDefined();
+    await fireEvent.keyDown(
+      await screen.findByRole("option", { name: physical, exact: true }),
+      { key: "Enter" },
+    );
+    await waitFor(() =>
+      expect(first.model.value[field]).toEqual([
+        expect.objectContaining({ mapping: physical }),
+      ]),
+    );
+    expect(group.getByRole("combobox").textContent).toBe(physical);
+    await flushPromises();
+  }
+  const saved = JSON.parse(JSON.stringify(first.model.value));
+  const validate = new Ajv({ strict: false, allErrors: true }).compile(schema);
+  expect(validate(saved), JSON.stringify(validate.errors)).toBe(true);
+  expect(validate({ ...saved, node: "pve2" })).toBe(false);
+  expect(validate({ ...saved, node_group: "rack-b" })).toBe(false);
+  first.unmount();
+  const second = editor(saved);
+  await flushPromises();
+  for (const [section, field, physical] of selections) {
+    const group = within(
+      screen.getByText(section, { exact: true }).parentElement!,
+    );
+    expect(group.getByRole("combobox").textContent).toBe(physical);
+    await fireEvent.keyDown(group.getByRole("combobox"), { key: "ArrowDown" });
+    const options = await screen.findAllByRole("option");
+    await fireEvent.keyDown(options[0], { key: "Enter" });
+    await waitFor(() =>
+      expect(second.model.value[field]).toEqual([
+        expect.objectContaining({ mapping: "" }),
+      ]),
+    );
+    await flushPromises();
+  }
+});
+
 test("adding disks initializes each Size to 20 without resetting existing sizes", async () => {
   const { model } = editor({ disk_size: 48 });
   await flushPromises();
@@ -165,6 +234,7 @@ test("unmodified Omni 1.13.3 shows saved flat hardware without mutating values o
     disk_iothread: true,
     balloon: true,
     firewall_options: { policy_in: "DROP" },
+    ha: { resource_affinity: "negative" },
     replication: { enabled: true, target_node: "pve3" },
     disks: [{ storage: "local-zfs", size: 20 }],
     nics: [{ bridge: "vmbr0", model: "virtio" }],
@@ -192,6 +262,7 @@ test("unmodified Omni 1.13.3 shows saved flat hardware without mutating values o
     "All NICs",
     "VM Firewall Options",
     "Storage Replication (ZFS)",
+    "Resource Affinity (PVE 9+)",
   ]) {
     expect(screen.queryByText(label, { exact: false })).toBeNull();
   }

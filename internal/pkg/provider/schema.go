@@ -27,7 +27,8 @@ var DefaultCPUTypes = []string{
 	"qemu64",
 }
 
-// NodeTopology describes the storages, bridges/VNets, and hardware mappings available on a single Proxmox node.
+// NodeTopology describes the storage, networks and hardware choices available on a node.
+// PCIMappings and USBMappings include resource mapping IDs and node/address physical device selections.
 type NodeTopology struct {
 	DiskStorages   []string
 	ISOStorages    []string
@@ -429,6 +430,8 @@ func (a *discoveryAccumulator) discoverFromNodes(ctx context.Context, px *proxmo
 		if ns.Status != "online" {
 			continue
 		}
+
+		a.discoverPhysicalDevices(ctx, px, ns.Node, logger)
 
 		node, nodeErr := px.Node(ctx, ns.Node)
 		if nodeErr != nil {

@@ -320,6 +320,10 @@ func (p *Provisioner) reconcileVMNodePlacement(
 		return nil, err
 	}
 
+	if hardwareErr := p.validatePhysicalDevicesOnNode(ctx, cmp.Or(targetNode, vm.Node), data); hardwareErr != nil {
+		return nil, hardwareErr
+	}
+
 	if targetNode == "" || targetNode == vm.Node {
 		return vm, nil
 	}
@@ -691,7 +695,7 @@ func buildPCIDeviceOptions(devices []PCIDevice) []proxmox.VirtualMachineOption {
 	options := make([]proxmox.VirtualMachineOption, 0, len(devices))
 
 	for i, pci := range devices {
-		pciParts := []string{fmt.Sprintf("mapping=%s", pci.Mapping)}
+		pciParts := []string{hardwareOption(pci.Mapping)}
 		if pci.PCIExpress {
 			pciParts = append(pciParts, "pcie=1")
 		}
