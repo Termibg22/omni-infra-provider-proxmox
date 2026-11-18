@@ -366,7 +366,7 @@ EOF
 # Use a throwaway container that shares Omni's volume to wait for and read the key.
 
 deadline=$(( $(date +%s) + 300 ))
-until [[ -n "$(docker run --rm --volumes-from omni alpine sh -c '[ -s /_out/key ] && cat /_out/key' 2>/dev/null)" ]]; do
+until docker run --rm --volumes-from omni alpine test -s /_out/key; do
   if [[ $(date +%s) -gt ${deadline} ]]; then
     echo "Omni did not write the service-account key within deadline"
     docker logs omni 2>&1 | tail -50 || true
@@ -376,16 +376,21 @@ until [[ -n "$(docker run --rm --volumes-from omni alpine sh -c '[ -s /_out/key 
 done
 
 export OMNI_ENDPOINT=https://localhost:8099
-export OMNI_SERVICE_ACCOUNT_KEY=$(docker run --rm --volumes-from omni alpine cat /_out/key)
+set +x
+OMNI_SERVICE_ACCOUNT_KEY=$(docker run --rm --volumes-from omni alpine cat /_out/key)
+export OMNI_SERVICE_ACCOUNT_KEY
+provider_key=$("${OMNICTL}" --insecure-skip-tls-verify infraprovider create proxmox | sed -n 's/^OMNI_SERVICE_ACCOUNT_KEY=//p')
+if [[ -z "${provider_key}" || "${provider_key}" == *$'\n'* ]]; then
+  echo "omnictl did not return exactly one provider key" >&2
+  exit 1
+fi
 
-${OMNICTL} --insecure-skip-tls-verify infraprovider create proxmox | tail -n5 | head -n2 | awk '{print "export " $0}' > ${TMP}/env
-
-source ${TMP}/env
-
-nice -n 10 ${ARTIFACTS}/omni-infra-provider-proxmox-linux-amd64 \
+OMNI_SERVICE_ACCOUNT_KEY="${provider_key}" nice -n 10 "${ARTIFACTS}/omni-infra-provider-proxmox-linux-amd64" \
   --omni-api-endpoint https://localhost:8099 \
   --config-file ${TMP}/proxmox-config.yaml \
   --insecure-skip-verify &
+unset provider_key
+set -x
 
 # Provider machine-class config for the auto-provision suite. WITH_HA_MODE appends an ha: block
 # so the run also exercises the provider's HA registration and affinity-rule reconciliation. The
@@ -400,7 +405,7 @@ fi
 docker run \
   -v $(pwd)/hack/certs:/etc/ssl/certs \
   -e SSL_CERT_DIR=/etc/ssl/certs \
-  -e OMNI_SERVICE_ACCOUNT_KEY=$(docker run --rm --volumes-from omni alpine cat /_out/key) \
+  -e OMNI_SERVICE_ACCOUNT_KEY \
   --network host \
   ${OMNI_INTEGRATION_TEST_IMAGE} \
   --omni.endpoint https://localhost:8099 \

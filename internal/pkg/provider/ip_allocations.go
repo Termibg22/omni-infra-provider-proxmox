@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"maps"
 	"slices"
+	"strings"
 
 	"github.com/cosi-project/runtime/pkg/safe"
 	"github.com/cosi-project/runtime/pkg/state"
@@ -36,6 +37,10 @@ func readIPAllocations(machine *resources.Machine) (map[string]ipAllocation, err
 	if raw, ok := machine.Metadata().Annotations().Get(ipAllocationsAnnotation); ok {
 		if err := json.Unmarshal([]byte(raw), &allocations); err != nil {
 			return nil, fmt.Errorf("invalid persisted IP allocations for %q: %w", machine.Metadata().ID(), err)
+		}
+
+		if allocations == nil {
+			return nil, fmt.Errorf("invalid persisted IP allocations for %q: expected an object, got null", machine.Metadata().ID())
 		}
 	}
 
@@ -86,27 +91,9 @@ func (p *Provisioner) allocateMachineIPs(ctx context.Context, _ *zap.Logger, pct
 	if err != nil {
 		return err
 	}
-	// Maps are sorted so identical requests allocate interfaces in a stable order.
-	for _, iface := range slices.Sorted(maps.Keys(pools)) {
-		pool := pools[iface]
 
-		owner := pctx.GetRequestID() + "/" + iface
-		if existing, ok := allocations[iface]; ok {
-			if existing.Pool != pool {
-				return fmt.Errorf("cannot change ip_pool of provisioned interface %s", iface)
-			}
-
-			if reserveErr := p.ipAllocator.Reserve(pool, owner, existing.Address); reserveErr != nil {
-				return reserveErr
-			}
-		}
-
-		addr, allocErr := p.ipAllocator.Allocate(pool, owner)
-		if allocErr != nil {
-			return fmt.Errorf("failed to allocate IP for %s: %w", iface, allocErr)
-		}
-
-		allocations[iface] = ipAllocation{Pool: pool, Address: addr}
+	if err = p.ipAllocator.allocateInterfaces(pctx.GetRequestID(), pools, allocations); err != nil {
+		return err
 	}
 
 	raw, err := json.Marshal(allocations)
@@ -115,6 +102,46 @@ func (p *Provisioner) allocateMachineIPs(ctx context.Context, _ *zap.Logger, pct
 	}
 
 	pctx.State.Metadata().Annotations().Set(ipAllocationsAnnotation, string(raw))
+
+	return nil
+}
+
+func (allocator *ipPoolAllocator) allocateInterfaces(requestID string, pools map[string]string, allocations map[string]ipAllocation) error {
+	allocator.mu.Lock()
+	defer allocator.mu.Unlock()
+
+	staged := ipPoolAllocator{allocations: maps.Clone(allocator.allocations)}
+
+	for _, pool := range pools {
+		key := strings.TrimSpace(pool)
+		if existing := allocator.allocations[key]; existing != nil {
+			staged.allocations[key] = maps.Clone(existing)
+		}
+	}
+
+	for _, iface := range slices.Sorted(maps.Keys(pools)) {
+		pool := pools[iface]
+
+		owner := requestID + "/" + iface
+		if existing, ok := allocations[iface]; ok {
+			if existing.Pool != pool {
+				return fmt.Errorf("cannot change ip_pool of provisioned interface %s", iface)
+			}
+
+			if reserveErr := staged.Reserve(pool, owner, existing.Address); reserveErr != nil {
+				return reserveErr
+			}
+		}
+
+		addr, allocErr := staged.Allocate(pool, owner)
+		if allocErr != nil {
+			return fmt.Errorf("failed to allocate IP for %s: %w", iface, allocErr)
+		}
+
+		allocations[iface] = ipAllocation{Pool: pool, Address: addr}
+	}
+
+	allocator.allocations = staged.allocations
 
 	return nil
 }

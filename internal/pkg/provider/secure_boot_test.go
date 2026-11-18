@@ -10,10 +10,13 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
+	"sync/atomic"
 	"testing"
 
 	"github.com/cosi-project/runtime/pkg/controller"
+	"github.com/cosi-project/runtime/pkg/safe"
 	"github.com/cosi-project/runtime/pkg/state"
 	"github.com/cosi-project/runtime/pkg/state/impl/inmem"
 	"github.com/luthermonson/go-proxmox"
@@ -41,6 +44,8 @@ func TestUEFIProvisioningMatchesTalosMedia(t *testing.T) {
 
 			var created map[string]any
 
+			var expandedInventory atomic.Bool
+
 			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				switch {
 				case r.Method == http.MethodPost && r.URL.Path == "/nodes/pve1/storage/local/download-url":
@@ -52,14 +57,22 @@ func TestUEFIProvisioningMatchesTalosMedia(t *testing.T) {
 				case r.Method != http.MethodGet:
 					t.Errorf("unexpected mutation: %s %s", r.Method, r.URL)
 					http.NotFound(w, r)
-				case r.URL.Path == "/nodes/pve1/status" || r.URL.Path == "/nodes/pve1/storage/local/status":
+				case r.URL.Path == "/nodes/pve1/status":
 					respond(t, w, map[string]any{})
 				case r.URL.Path == "/cluster/status":
 					respond(t, w, []any{})
 				case r.URL.Path == "/cluster/nextid":
 					respond(t, w, "100")
 				case r.URL.Path == "/nodes/pve1/storage":
-					respond(t, w, []map[string]any{{"storage": "local-zfs", "content": "images", "active": 1, "enabled": 1}})
+					stores := []map[string]any{
+						{"storage": "local-zfs", "content": "images", "active": 1, "enabled": 1},
+						{"storage": "local", "content": "iso", "active": 1, "enabled": 1},
+					}
+					if expandedInventory.Load() {
+						stores = append(stores, map[string]any{"storage": "aaa-new", "content": "iso", "active": 1, "enabled": 1})
+					}
+
+					respond(t, w, stores)
 				case strings.HasPrefix(r.URL.Path, "/nodes/pve1/tasks/"):
 					respond(t, w, map[string]any{"status": "stopped", "exitstatus": "OK"})
 				case strings.HasPrefix(r.URL.Path, "/nodes/pve1/storage/local/content/local:iso/"):
@@ -88,7 +101,6 @@ func TestUEFIProvisioningMatchesTalosMedia(t *testing.T) {
 			req.TypedSpec().Value.ProviderData = fmt.Sprintf(`bios: ovmf
 machine: q35
 secure_boot: %t
-iso_storage: local
 storage: local-zfs
 additional_disks:
   - disk_size: 100
@@ -111,15 +123,33 @@ additional_disks:
 					return imagefactory.ResolveInstallationMedia(ctx, st, version, spec.MediaSpec, id, spec.StandaloneURL)
 				})
 
-			p := NewProvisioner(proxmox.NewClient(server.URL))
-			for _, step := range p.ProvisionSteps() {
-				if step.Name() != "uploadISO" && step.Name() != "syncVM" {
-					continue
-				}
+			for _, name := range []string{"uploadISO", "syncVM"} {
+				steps := NewProvisioner(proxmox.NewClient(server.URL)).ProvisionSteps()
+				index := slices.IndexFunc(steps, func(s provision.Step[*resources.Machine]) bool { return s.Name() == name })
+				require.NotEqual(t, -1, index)
+
+				step := steps[index]
 
 				var retry *controller.RequeueError
 				require.ErrorAs(t, step.Run(t.Context(), zap.NewNop(), pctx), &retry)
 				require.NoError(t, step.Run(t.Context(), zap.NewNop(), pctx), "the completed task must allow provisioning to continue")
+
+				if name == "uploadISO" {
+					cached := pctx
+					cached.State = resources.NewMachine("default", "cached")
+					cached.State.TypedSpec().Value.Node = "pve1"
+					require.NoError(t, step.Run(t.Context(), zap.NewNop(), cached))
+					require.Empty(t, cached.State.TypedSpec().Value.VolumeUploadTask)
+					require.Equal(t, "local", cached.State.Metadata().Annotations().Raw()[bootISOStorageAnnotation])
+
+					require.NoError(t, st.Create(t.Context(), pctx.State))
+					stored, err := safe.StateGet[*resources.Machine](t.Context(), st, machine.Metadata())
+					require.NoError(t, err)
+					require.Equal(t, "local", stored.Metadata().Annotations().Raw()[bootISOStorageAnnotation])
+					pctx.State = stored
+
+					expandedInventory.Store(true)
+				}
 			}
 
 			require.True(t, resolved)

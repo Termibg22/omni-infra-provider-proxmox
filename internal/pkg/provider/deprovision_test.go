@@ -31,6 +31,149 @@ import (
 	"github.com/siderolabs/omni-infra-provider-proxmox/internal/pkg/provider/resources"
 )
 
+const deprovisionTestUUID = "d00dcafe-11aa-45c7-b0a6-123456789abc"
+
+func TestReusedVMIDCannotBeMutatedByOldRequest(t *testing.T) {
+	var mutations atomic.Int32
+
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, req *http.Request) {
+		if req.Method != http.MethodGet {
+			mutations.Add(1)
+			http.Error(writer, "unexpected mutation", http.StatusBadRequest)
+
+			return
+		}
+
+		switch req.URL.Path {
+		case "/nodes/pve/status":
+			respond(t, writer, map[string]any{})
+		case "/cluster/resources":
+			respond(t, writer, []map[string]any{{"node": "pve", "vmid": 100, "type": "qemu"}})
+		case "/nodes/pve/qemu/100/status/current":
+			respond(t, writer, map[string]any{"vmid": 100, "status": "running"})
+		case "/nodes/pve/qemu/100/config":
+			respond(t, writer, map[string]any{"name": "worker", "smbios1": "uuid=b7f71c26-e59e-469b-aadc-b6cddddf7900", "protection": 1})
+		default:
+			t.Errorf("unexpected lookup: %s", req.URL.Path)
+			http.NotFound(writer, req)
+		}
+	}))
+	t.Cleanup(server.Close)
+
+	machine := resources.NewMachine("default", "worker")
+	machine.TypedSpec().Value.Vmid = 100
+	machine.TypedSpec().Value.Node = "pve"
+	machine.TypedSpec().Value.Uuid = deprovisionTestUUID
+	machine.TypedSpec().Value.HaRegistered = true
+	req := infra.NewMachineRequest("worker")
+	req.TypedSpec().Value.ProviderData = "ha:\n  state: started\n"
+	prov := NewProvisioner(proxmox.NewClient(server.URL))
+	pctx := testContext(machine, req.TypedSpec().Value.ProviderData)
+
+	for _, step := range prov.ProvisionSteps() {
+		switch step.Name() {
+		case "startVM", "registerHA", "syncHARules":
+			require.ErrorContains(t, step.Run(t.Context(), zap.NewNop(), pctx), "does not match the recorded identity", step.Name())
+		}
+	}
+
+	require.ErrorContains(t, prov.Deprovision(t.Context(), zap.NewNop(), machine, req), "does not match the recorded identity")
+	require.ErrorContains(t, prov.ReconcileExistingMachine(t.Context(), zap.NewNop(), machine, req), "does not match the recorded identity")
+	require.Zero(t, mutations.Load())
+}
+
+func TestPendingCloneIdentityExpiresAtFirstStart(t *testing.T) {
+	machine := resources.NewMachine("default", "worker")
+	spec := machine.TypedSpec().Value
+	spec.Vmid = 100
+	spec.Uuid = deprovisionTestUUID
+	spec.VmCreateTask = "UPID:pve:00000001:00000001:00000001:qmclone:9000:root@pam:"
+	vm := &proxmox.VirtualMachine{
+		VMID: 100, Node: "pve",
+		VirtualMachineConfig: &proxmox.VirtualMachineConfig{Name: "omni-" + deprovisionTestUUID, SMBios1: "uuid=clone-default"},
+	}
+
+	require.NoError(t, verifyVMIdentity(vm, machine, true))
+	require.Error(t, verifyVMIdentity(vm, machine, false))
+	vm.VirtualMachineConfig.Name = machine.Metadata().ID()
+	require.Error(t, verifyVMIdentity(vm, machine, true))
+	vm.VirtualMachineConfig.Name = "omni-" + deprovisionTestUUID
+	spec.VmStartTask = "UPID:pve:00000001:00000001:00000001:qmstart:100:root@pam:"
+
+	require.Error(t, verifyVMIdentity(vm, machine, true))
+	vm.VirtualMachineConfig.SMBios1 = "uuid=" + deprovisionTestUUID
+	vm.VirtualMachineConfig.Name = machine.Metadata().ID()
+	require.NoError(t, verifyVMIdentity(vm, machine, false))
+	vm.VirtualMachineConfig.Template = true
+	require.Error(t, verifyVMIdentity(vm, machine, false))
+}
+
+func TestDeprovisionRequiresPositiveConfirmationOfAbsence(t *testing.T) {
+	var checked atomic.Bool
+
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, req *http.Request) {
+		require.Equal(t, http.MethodGet, req.Method)
+
+		switch req.URL.Path {
+		case "/cluster/resources":
+			respond(t, writer, []any{})
+		case "/cluster/nextid":
+			require.Equal(t, "100", req.URL.Query().Get("vmid"))
+			checked.Store(true)
+			http.Error(writer, "unable to confirm VMID", http.StatusForbidden)
+		default:
+			t.Errorf("unexpected operation: %s", req.URL.Path)
+			http.NotFound(writer, req)
+		}
+	}))
+	t.Cleanup(server.Close)
+
+	machine := resources.NewMachine("default", "worker")
+	machine.TypedSpec().Value.Vmid = 100
+	machine.TypedSpec().Value.HaRegistered = true
+	prov := NewProvisioner(proxmox.NewClient(server.URL))
+	require.ErrorContains(t, prov.Deprovision(t.Context(), zap.NewNop(), machine, infra.NewMachineRequest("worker")), "cannot confirm absence of VM 100")
+	require.True(t, checked.Load())
+}
+
+func TestDeprovisionWaitsForVMCreationWhenVMIDIsStillFree(t *testing.T) {
+	const cloneTask = "UPID:pve:00000001:00000001:00000001:qmclone:9000:root@pam:"
+
+	var finished atomic.Bool
+
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, req *http.Request) {
+		require.Equal(t, http.MethodGet, req.Method)
+
+		switch req.URL.Path {
+		case "/cluster/resources":
+			respond(t, writer, []any{})
+		case "/cluster/nextid":
+			respond(t, writer, "100")
+		case "/nodes/pve/tasks/" + cloneTask + "/status":
+			if finished.Load() {
+				respond(t, writer, map[string]any{"status": "stopped", "exitstatus": "OK"})
+
+				return
+			}
+
+			respond(t, writer, map[string]any{"status": "running"})
+		default:
+			t.Errorf("unexpected operation: %s", req.URL.Path)
+			http.NotFound(writer, req)
+		}
+	}))
+	t.Cleanup(server.Close)
+
+	machine := resources.NewMachine("default", "worker")
+	machine.TypedSpec().Value.Vmid = 100
+	machine.TypedSpec().Value.VmCreateTask = cloneTask
+	prov := NewProvisioner(proxmox.NewClient(server.URL))
+	req := infra.NewMachineRequest("worker")
+	require.ErrorContains(t, prov.Deprovision(t.Context(), zap.NewNop(), machine, req), "cannot confirm VM 100 creation has finished")
+	finished.Store(true)
+	require.NoError(t, prov.Deprovision(t.Context(), zap.NewNop(), machine, req))
+}
+
 func TestDeprovisionDoesNotRequireISOCleanupPermission(t *testing.T) {
 	previous := taskPollInterval
 	taskPollInterval = time.Millisecond
@@ -52,7 +195,8 @@ func TestDeprovisionDoesNotRequireISOCleanupPermission(t *testing.T) {
 	})
 	mux.HandleFunc("GET /nodes/pve/qemu/100/config", func(w http.ResponseWriter, _ *http.Request) {
 		respond(t, w, map[string]any{
-			"tags": "go-proxmox+cloud-init", "ide0": "local:iso/user-data-100.iso,media=cdrom",
+			"smbios1": "serial=1234,uuid=" + strings.ToUpper(deprovisionTestUUID) + ",base64=1",
+			"tags":    "go-proxmox+cloud-init", "ide0": "local:iso/user-data-100.iso,media=cdrom",
 			"ide2": "local:iso/talos-shared.iso,media=cdrom", "scsi0": "local-zfs:vm-100-disk-0,size=20G",
 		})
 	})
@@ -79,6 +223,7 @@ func TestDeprovisionDoesNotRequireISOCleanupPermission(t *testing.T) {
 
 	machine := resources.NewMachine((resources.MachineExtension{}).ResourceDefinition().DefaultNamespace, "worker")
 	machine.TypedSpec().Value.Vmid = 100
+	machine.TypedSpec().Value.Uuid = deprovisionTestUUID
 	machine.TypedSpec().Value.Node = "pve"
 	core, logs := observer.New(zap.WarnLevel)
 	p := NewProvisioner(proxmox.NewClient(srv.URL))
@@ -192,7 +337,9 @@ func TestDeprovisionControllerKeepsStateUntilDeletionSucceeds(t *testing.T) {
 					}
 
 					respond(t, w, task)
-				case r.URL.Path == "/nodes/pve/status", r.URL.Path == "/nodes/pve/qemu/100/config":
+				case r.URL.Path == "/nodes/pve/qemu/100/config":
+					respond(t, w, map[string]any{"smbios1": "uuid=" + deprovisionTestUUID})
+				case r.URL.Path == "/nodes/pve/status":
 					respond(t, w, map[string]any{})
 				case r.URL.Path == "/nodes/pve/qemu/100/status/current":
 					respond(t, w, map[string]any{"vmid": 100, "status": "stopped"})
@@ -225,6 +372,7 @@ func TestDeprovisionControllerKeepsStateUntilDeletionSucceeds(t *testing.T) {
 
 			machine := resources.NewMachine((resources.MachineExtension{}).ResourceDefinition().DefaultNamespace, "worker")
 			machine.TypedSpec().Value.Vmid = 100
+			machine.TypedSpec().Value.Uuid = deprovisionTestUUID
 			machine.TypedSpec().Value.Node = "pve"
 			require.NoError(t, st.Create(t.Context(), machine, state.WithCreateOwner(ctrl.Name())))
 

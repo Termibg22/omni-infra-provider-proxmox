@@ -220,6 +220,7 @@ func TestMachineUpdaterPersistsProviderData(t *testing.T) {
 		machine := resources.NewMachine((resources.MachineExtension{}).ResourceDefinition().DefaultNamespace, "worker")
 		machine.TypedSpec().Value.Vmid = 100
 		machine.TypedSpec().Value.Node = "pve"
+		machine.TypedSpec().Value.Uuid = deprovisionTestUUID
 
 		if !adopt {
 			recordAppliedProviderData(machine, "cores: 2\nmemory: 4096\n")
@@ -235,7 +236,11 @@ func TestMachineUpdaterPersistsProviderData(t *testing.T) {
 			respond(t, w, map[string]any{"vmid": 100, "status": "running"})
 		})
 		mux.HandleFunc("GET /nodes/pve/qemu/100/config", func(w http.ResponseWriter, _ *http.Request) {
-			respond(t, w, map[string]any{"scsi0": "zfs:vm-100-disk-0,size=20G", "net0": "virtio=BC:24:11:AA:BB:01,bridge=vmbr0"})
+			respond(t, w, map[string]any{
+				"smbios1": "uuid=" + deprovisionTestUUID,
+				"scsi0":   "zfs:vm-100-disk-0,size=20G",
+				"net0":    "virtio=BC:24:11:AA:BB:01,bridge=vmbr0",
+			})
 		})
 		mux.HandleFunc("GET /nodes/pve/storage", func(w http.ResponseWriter, _ *http.Request) {
 			respond(t, w, []map[string]any{{"storage": "zfs", "content": "images", "active": 1, "enabled": 1}})

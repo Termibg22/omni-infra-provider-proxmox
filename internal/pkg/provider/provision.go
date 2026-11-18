@@ -34,8 +34,9 @@ import (
 )
 
 const (
-	machineRequestTagPrefix = "machine-request."
-	poolComment             = "managed by omni-infra-provider-proxmox"
+	bootISOStorageAnnotation = "proxmox.omni.siderolabs.io/boot-iso-storage"
+	machineRequestTagPrefix  = "machine-request."
+	poolComment              = "managed by omni-infra-provider-proxmox"
 
 	// taskLogTailLines is how many of the last task log lines a task failure error carries.
 	taskLogTailLines = 10
@@ -128,8 +129,8 @@ func (p *Provisioner) ProvisionSteps() []provision.Step[*resources.Machine] {
 				return fmt.Errorf("no nodes available")
 			}
 
-			// Filter candidate nodes by `node_group` (if set) and PCI/USB hardware mapping topology
-			nodes, err = p.filterNodesByGroupAndTopology(ctx, logger, nodes, data)
+			// Check placement constraints before persisting the provision target.
+			nodes, err = p.provisioningCandidates(ctx, logger, nodes, data)
 			if err != nil {
 				return err
 			}
@@ -137,7 +138,7 @@ func (p *Provisioner) ProvisionSteps() []provision.Step[*resources.Machine] {
 			// If user specified a node, validate and use it
 			if data.Node != "" {
 				for _, node := range nodes {
-					if node.Node == data.Node {
+					if node != nil && node.Node == data.Node {
 						if node.Status != "online" {
 							return fmt.Errorf("specified node %q is not online (status: %s)", data.Node, node.Status)
 						}
@@ -186,6 +187,10 @@ func (p *Provisioner) ProvisionSteps() []provision.Step[*resources.Machine] {
 			wantTag := machineRequestTagPrefix + machineRequestSet
 
 			for _, node := range nodes {
+				if node == nil {
+					continue
+				}
+
 				// Skip nodes that are not online to avoid Proxmox API errors
 				if node.Status != "online" {
 					logger.Debug("skipping offline node", zap.String("node", node.Node), zap.String("status", node.Status))
@@ -329,10 +334,15 @@ func (p *Provisioner) ProvisionSteps() []provision.Step[*resources.Machine] {
 				return err
 			}
 
-			storage, err := p.resolveISOStorage(ctx, node, data.ISOStorage)
+			pinned, _ := pctx.State.Metadata().Annotations().Get(bootISOStorageAnnotation)
+
+			storages, err := listISOStorages(ctx, node, cmp.Or(pinned, data.ISOStorage))
 			if err != nil {
 				return fmt.Errorf("failed to get ISO storage: %w", err)
 			}
+
+			storage := storages[0]
+			pctx.State.Metadata().Annotations().Set(bootISOStorageAnnotation, storage.Name)
 
 			p.pendingISODownloadsMu.Lock()
 			defer p.pendingISODownloadsMu.Unlock()
@@ -466,16 +476,11 @@ func (p *Provisioner) ProvisionSteps() []provision.Step[*resources.Machine] {
 
 			// Branch 1: Clone from a Proxmox VM template when the effective mode is clone.
 			if data.IsTemplateClone() {
-				return p.cloneFromTemplate(ctx, logger, pctx, data, vmid, primaryStorage, poolValue)
+				return p.cloneFromTemplate(ctx, logger, pctx, data, vmid, poolValue)
 			}
 
 			// Branch 2: Create VM from Talos Installation ISO
-			isoStorage, err := p.resolveISOStorage(ctx, node, data.ISOStorage)
-			if err != nil {
-				return err
-			}
-
-			iso, err := isoStorage.ISO(ctx, pctx.State.TypedSpec().Value.VolumeId)
+			iso, err := resolveBootISO(ctx, node, pctx.State, data.ISOStorage)
 			if err != nil {
 				return err
 			}
@@ -668,6 +673,12 @@ func (p *Provisioner) ProvisionSteps() []provision.Step[*resources.Machine] {
 					return vmErr
 				}
 
+				if !gone {
+					if identityErr := verifyVMIdentity(vm, pctx.State, false); identityErr != nil {
+						return identityErr
+					}
+				}
+
 				// the task failed, but the VM may be up regardless (e.g. it was already running)
 				if !gone && vm.IsRunning() {
 					logger.Info("VM start task failed, but the VM is running", zap.Error(err))
@@ -690,9 +701,23 @@ func (p *Provisioner) ProvisionSteps() []provision.Step[*resources.Machine] {
 
 			data.ApplyWorkloadProfile()
 
-			vm, err := p.getVM(ctx, spec.Node, spec.Vmid)
+			node, err := p.proxmoxClient.Node(ctx, spec.Node)
 			if err != nil {
 				return err
+			}
+
+			vm, err := node.VirtualMachine(ctx, int(spec.Vmid))
+			if err != nil {
+				return err
+			}
+
+			if identityErr := verifyVMIdentity(vm, pctx.State, data.IsTemplateClone()); identityErr != nil {
+				return identityErr
+			}
+
+			isoStorages, err := listISOStorages(ctx, node, data.ISOStorage)
+			if err != nil {
+				return fmt.Errorf("cannot select storage for the NoCloud ISO: %w", err)
 			}
 
 			// When cloned from a template, apply hardware overrides and resize the boot disk before starting
@@ -701,8 +726,12 @@ func (p *Provisioner) ProvisionSteps() []provision.Step[*resources.Machine] {
 					return err
 				}
 
-				if vm, err = p.getVM(ctx, spec.Node, spec.Vmid); err != nil {
+				if vm, err = node.VirtualMachine(ctx, int(spec.Vmid)); err != nil {
 					return err
+				}
+
+				if identityErr := verifyVMIdentity(vm, pctx.State, false); identityErr != nil {
+					return identityErr
 				}
 			}
 
@@ -746,11 +775,6 @@ func (p *Provisioner) ProvisionSteps() []provision.Step[*resources.Machine] {
 				return fmt.Errorf("failed to build cloud-init network config: %w", err)
 			}
 
-			var ciOpts []proxmox.CloudInitOption
-			if data.ISOStorage != "" {
-				ciOpts = append(ciOpts, proxmox.WithCloudInitStorage(data.ISOStorage))
-			}
-
 			err = vm.CloudInit(
 				ctx,
 				"ide0",
@@ -765,7 +789,7 @@ hostname: %s`,
 				),
 				"",
 				networkConfig,
-				ciOpts...,
+				proxmox.WithCloudInitStorage(isoStorages[0].Name),
 			)
 			if err != nil {
 				return fmt.Errorf("failed to inject nocloud config: %w", err)
@@ -815,55 +839,7 @@ func (p *Provisioner) Deprovision(ctx context.Context, logger *zap.Logger, machi
 	logger = logger.With(zap.Int32("vmid", machine.TypedSpec().Value.Vmid), zap.String("requestID", machineRequest.Metadata().ID()))
 	logger.Info("deprovisioning VM and its disks")
 
-	// HA must stop managing the VM before we stop it. The VM delete request
-	// purges replication/backup jobs without requiring separate cleanup APIs.
-	if err := p.ha.Deprovision(ctx, logger, machine); err != nil {
-		return err
-	}
-
-	haRegistered := machine.TypedSpec().Value.HaRegistered
-
-	var (
-		node  string
-		found bool
-	)
-
-	if haRegistered {
-		var err error
-
-		node, found, err = p.ha.FindVMNode(ctx, machine.TypedSpec().Value.Vmid)
-		if err != nil {
-			return err
-		}
-	} else {
-		node = machine.TypedSpec().Value.Node
-
-		found = node != ""
-		if found {
-			if _, err := p.getVM(ctx, node, machine.TypedSpec().Value.Vmid); err != nil {
-				if !isAlreadyGoneErr(err) {
-					return fmt.Errorf("failed to locate VM %d on node %q for deletion: %w", machine.TypedSpec().Value.Vmid, node, err)
-				}
-
-				node, found, err = p.ha.FindVMNode(ctx, machine.TypedSpec().Value.Vmid)
-				if err != nil {
-					return err
-				}
-			}
-		}
-	}
-
-	if !found {
-		p.ipAllocator.Release(machineRequest.Metadata().ID())
-
-		if pool := machine.TypedSpec().Value.Pool; pool != "" {
-			p.cleanupPool(ctx, logger, pool)
-		}
-
-		return nil
-	}
-
-	if err := p.destroyVM(ctx, logger, node, machine.TypedSpec().Value.Vmid); err != nil {
+	if err := p.destroyVM(ctx, logger, machine); err != nil {
 		return err
 	}
 
@@ -1307,12 +1283,59 @@ func (p *Provisioner) cleanupPool(ctx context.Context, logger *zap.Logger, poolI
 	logger.Info("deleted empty proxmox pool", zap.String("pool", poolID))
 }
 
-func (p *Provisioner) resolveISOStorage(ctx context.Context, node *proxmox.Node, isoStorage string) (*proxmox.Storage, error) {
-	if isoStorage != "" {
-		return node.Storage(ctx, isoStorage)
+func listISOStorages(ctx context.Context, node *proxmox.Node, requested string) (proxmox.Storages, error) {
+	storages, err := node.Storages(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("cannot read storage on node %q: %w", node.Name, err)
 	}
 
-	return node.StorageISO(ctx)
+	return isoStorageCandidates(node.Name, storages, requested)
+}
+
+func isoStorageCandidates(nodeName string, storages proxmox.Storages, requested string) (proxmox.Storages, error) {
+	selected := slices.DeleteFunc(slices.Clone(storages), func(storage *proxmox.Storage) bool {
+		return !storageSupports(storage, "iso") || storage.Name == "" || (requested != "" && storage.Name != requested)
+	})
+
+	if len(selected) == 0 {
+		if requested != "" {
+			return nil, fmt.Errorf("no active ISO storage named %q on node %q", requested, nodeName)
+		}
+
+		return nil, fmt.Errorf("no active ISO storage on node %q", nodeName)
+	}
+
+	slices.SortFunc(selected, func(a, b *proxmox.Storage) int { return cmp.Compare(a.Name, b.Name) })
+
+	return selected, nil
+}
+
+func resolveBootISO(ctx context.Context, node *proxmox.Node, machine *resources.Machine, requested string) (*proxmox.ISO, error) {
+	pinned, _ := machine.Metadata().Annotations().Get(bootISOStorageAnnotation)
+
+	storages, err := listISOStorages(ctx, node, cmp.Or(pinned, requested))
+	if err != nil {
+		return nil, err
+	}
+
+	// Older machines persisted only the filename. Their provider selected the
+	// first ISO store in API response order, so look up the actual volume.
+	filename := machine.TypedSpec().Value.VolumeId
+
+	var failures []error
+
+	for _, storage := range storages {
+		iso, lookupErr := storage.ISO(ctx, filename)
+		if lookupErr == nil {
+			machine.Metadata().Annotations().Set(bootISOStorageAnnotation, storage.Name)
+
+			return iso, nil
+		}
+
+		failures = append(failures, fmt.Errorf("storage %q: %w", storage.Name, lookupErr))
+	}
+
+	return nil, fmt.Errorf("cannot locate boot ISO %q on node %q: %w", filename, node.Name, errors.Join(failures...))
 }
 
 // resolveStorage resolves a VM disk storage pool on node using either a direct storage name
@@ -1323,6 +1346,10 @@ func (p *Provisioner) resolveStorage(ctx context.Context, node *proxmox.Node, di
 		return "", err
 	}
 
+	return resolveDiskStorage(node.Name, storages, directStorage, selector)
+}
+
+func resolveDiskStorage(nodeName string, storages proxmox.Storages, directStorage, selector string) (string, error) {
 	if directStorage != "" {
 		for _, st := range storages {
 			if st != nil && st.Name == directStorage && diskStorageUsable(st) {
@@ -1330,10 +1357,10 @@ func (p *Provisioner) resolveStorage(ctx context.Context, node *proxmox.Node, di
 			}
 		}
 
-		return "", fmt.Errorf("selected storage %q is not available on node %q", directStorage, node.Name)
+		return "", fmt.Errorf("selected storage %q is not available on node %q", directStorage, nodeName)
 	}
 
-	return matchStorage(node.Name, storages, selector)
+	return matchStorage(nodeName, storages, selector)
 }
 
 func matchStorage(nodeName string, storages proxmox.Storages, selector string) (string, error) {
@@ -1462,7 +1489,7 @@ func (p *Provisioner) giveUp(ctx context.Context, logger *zap.Logger, pctx provi
 
 	logger.Error("giving up provisioning, destroying VM", zap.Int32("vmid", spec.Vmid), zap.Error(cause))
 
-	if err := p.destroyVM(ctx, logger, spec.Node, spec.Vmid); err != nil {
+	if err := p.destroyVM(ctx, logger, pctx.State); err != nil {
 		return fmt.Errorf("%w; failed to destroy VM: %w", cause, err)
 	}
 
@@ -1478,20 +1505,27 @@ func (p *Provisioner) giveUp(ctx context.Context, logger *zap.Logger, pctx provi
 }
 
 // destroyVM stops (unless already stopped) and deletes the VM, treating an already removed VM or node as success.
-func (p *Provisioner) destroyVM(ctx context.Context, logger *zap.Logger, node string, vmid int32) error {
-	vm, err := p.getVM(ctx, node, vmid)
-	if err != nil {
-		// The VM, or the node it was provisioned on, was removed out-of-band
-		// (directly in Proxmox). There is nothing left to tear down.
-		if isAlreadyGoneErr(err) {
-			logger.Info("VM or its node no longer exists, treating as already deleted",
-				zap.String("node", node), zap.Int32("vmid", vmid), zap.Error(err))
+func (p *Provisioner) destroyVM(ctx context.Context, logger *zap.Logger, machine *resources.Machine) error {
+	vmid := machine.TypedSpec().Value.Vmid
 
-			return nil
-		}
-
-		return fmt.Errorf("failed to read VM %d on node %q for deletion: %w", vmid, node, err)
+	vm, err := p.findVMForTeardown(ctx, machine)
+	if errors.Is(err, errVMAbsent) {
+		return p.ha.Deprovision(ctx, logger, machine)
 	}
+
+	if err != nil {
+		return fmt.Errorf("failed to identify VM %d for deletion: %w", vmid, err)
+	}
+
+	if err := verifyVMIdentity(vm, machine, true); err != nil {
+		return err
+	}
+
+	if err := p.ha.Deprovision(ctx, logger, machine); err != nil {
+		return err
+	}
+
+	node := vm.Node
 
 	if vm.VirtualMachineConfig != nil && bool(vm.VirtualMachineConfig.Protection) {
 		task, cfgErr := vm.Config(ctx, proxmox.VirtualMachineOption{Name: "protection", Value: 0})
@@ -1668,12 +1702,16 @@ func pickNode(nodeInfoList []nodeStatus) nodeStatus {
 }
 
 func diskStorageUsable(storage *proxmox.Storage) bool {
+	return storageSupports(storage, "images")
+}
+
+func storageSupports(storage *proxmox.Storage, kind string) bool {
 	if storage == nil || storage.Enabled == 0 || storage.Active == 0 {
 		return false
 	}
 
 	for content := range strings.SplitSeq(storage.Content, ",") {
-		if strings.TrimSpace(content) == "images" {
+		if strings.TrimSpace(content) == kind {
 			return true
 		}
 	}

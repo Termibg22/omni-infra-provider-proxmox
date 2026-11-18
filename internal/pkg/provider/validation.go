@@ -6,6 +6,7 @@ package provider
 
 import (
 	"fmt"
+	"math"
 	"regexp"
 	"strings"
 
@@ -14,11 +15,15 @@ import (
 
 var volumeNamePattern = regexp.MustCompile(`^[a-z][a-z0-9-]{0,47}$`)
 
+func validLimit(value float64) bool {
+	return value >= 0 && !math.IsInf(value, 0)
+}
+
 // Validate checks invariants shared by the UI, flat YAML and live updates.
 // Call after ApplyWorkloadProfile, before issuing any mutating API request.
 func (d *Data) Validate() error {
-	if d.Cores < 0 || d.Sockets < 0 || d.CPULimit < 0 || d.CPUUnits < 0 {
-		return fmt.Errorf("CPU values cannot be negative")
+	if d.Cores < 0 || d.Sockets < 0 || !validLimit(d.CPULimit) || d.CPUUnits < 0 {
+		return fmt.Errorf("CPU values must be finite and nonnegative")
 	}
 
 	if err := config.ValidateVMIDRange(d.MinVMID, d.MaxVMID); err != nil {
@@ -66,6 +71,14 @@ func (d *Data) validateDisks() error {
 		}
 
 		bus := disk.EffectiveBus()
+		if disk.Bus != "" && disk.Bus != bus {
+			return fmt.Errorf("disk %d: unknown bus %q (expected scsi, sata or virtio)", i, disk.Bus)
+		}
+
+		if disk.IOPSRead < 0 || disk.IOPSWrite < 0 || !validLimit(disk.MBPSRead) || !validLimit(disk.MBPSWrite) {
+			return fmt.Errorf("disk %d: I/O limits must be finite and nonnegative", i)
+		}
+
 		busCounts[bus]++
 
 		limit := map[string]int{"scsi": 31, "virtio": 16, "sata": 6}[bus]
@@ -97,6 +110,10 @@ func (d *Data) validateNetwork() error {
 	}
 
 	for i, nic := range nics {
+		if nic.MTU < 0 || nic.Queues < 0 || !validLimit(nic.RateLimit) {
+			return fmt.Errorf("NIC %d: MTU, queues and rate limit must be finite and nonnegative", i)
+		}
+
 		if nic.Vlan > 4094 {
 			return fmt.Errorf("NIC %d: VLAN must be between 0 and 4094", i)
 		}

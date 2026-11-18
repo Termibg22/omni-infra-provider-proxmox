@@ -74,6 +74,34 @@ func TestCloneModeRequiresTemplate(t *testing.T) {
 	}
 }
 
+func TestTemplateLookupRejectsAmbiguousNamesAndOversizedIDs(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		require.Equal(t, "/cluster/resources", r.URL.Path)
+		respond(t, w, []map[string]any{
+			{"type": "qemu", "node": "a", "vmid": 9000, "template": 1, "name": "Talos"},
+			{"type": "qemu", "node": "b", "vmid": 9001, "template": 1, "name": "talos"},
+			{"type": "lxc", "node": "b", "vmid": 9002, "template": 1, "name": "container"},
+		})
+	}))
+	defer server.Close()
+
+	p := NewProvisioner(proxmox.NewClient(server.URL))
+	for template, want := range map[string]string{"TALOS": "multiple VM templates", "container": "not found", "4294976296": "exceeds"} {
+		_, err := p.findTemplateVM(t.Context(), Data{TemplateVMID: template})
+		require.ErrorContains(t, err, want)
+	}
+}
+
+func TestInvalidHardwareLimitsDoNotBecomeUnlimited(t *testing.T) {
+	for _, input := range []string{"cpu_limit: .nan", "disks: [{bus: sas}]", "disks: [{mbps_read: .inf}]", "disks: [{iops_write: -1}]", "additional_nics: [{rate_limit: -1}]"} {
+		var data Data
+
+		require.NoError(t, yaml.Unmarshal([]byte(input), &data))
+		data.ApplyWorkloadProfile()
+		require.Error(t, data.Validate(), input)
+	}
+}
+
 func TestClearedCloneModeRequiresReprovisioning(t *testing.T) {
 	const old = "template_vmid: '9000'"
 
@@ -81,7 +109,8 @@ func TestClearedCloneModeRequiresReprovisioning(t *testing.T) {
 
 	require.NoError(t, yaml.Unmarshal([]byte(old+"\nprovisioning_mode: ''\n"), &data))
 	data.ApplyWorkloadProfile()
-	require.ErrorContains(t, validateLiveUpdate(old, data), "changing installation media")
+	_, err := validateLiveUpdate(old, data)
+	require.ErrorContains(t, err, "changing installation media")
 }
 
 func TestAdditionalDiskAutoKeepsLegacyStorageSelector(t *testing.T) {

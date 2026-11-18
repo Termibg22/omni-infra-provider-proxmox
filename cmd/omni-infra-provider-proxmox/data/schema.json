@@ -775,7 +775,7 @@
       "type": "boolean",
       "title": "Full Clone",
       "default": true,
-      "description": "Only used in clone mode: full disk copy when enabled, linked clone when disabled. If omitted, the provider uses a full clone. Ignored in ISO mode."
+      "description": "Clone mode only. Enabled or omitted: copy disks to the selected storage. Disabled: linked clone using the template's disk storage; leave boot storage blank or select the same storage."
     },
     "architecture": {
       "type": "string",

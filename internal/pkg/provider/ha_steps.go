@@ -30,6 +30,10 @@ func (p *Provisioner) registerHAStep(ctx context.Context, _ *zap.Logger, pctx pr
 		return fmt.Errorf("vmid not assigned before HA registration")
 	}
 
+	if _, err := p.locateExistingVM(ctx, pctx.State); err != nil {
+		return err
+	}
+
 	if err := p.ha.Register(ctx, fmt.Sprintf("vm:%d", pctx.State.TypedSpec().Value.Vmid), *data.HA); err != nil {
 		return err
 	}
@@ -52,6 +56,11 @@ func (p *Provisioner) syncHARulesStep(ctx context.Context, logger *zap.Logger, p
 	}
 
 	cfg := *data.HA
+
+	if _, err := p.locateExistingVM(ctx, pctx.State); err != nil {
+		return err
+	}
+
 	if data.NodeGroup != "" && len(cfg.NodeAffinityNodes) == 0 {
 		nodes, err := p.resolveNodeGroupNodes(ctx, data.NodeGroup)
 		if err != nil {

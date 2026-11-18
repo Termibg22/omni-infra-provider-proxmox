@@ -1,5 +1,21 @@
 # Revisión del proveedor Proxmox
 
+## Revisión del 17 de noviembre de 2026 (base `v4.1.10`, `6440101`)
+
+| Área | Fallo encontrado | Comportamiento corregido |
+| --- | --- | --- |
+| Ciclo de vida | Tras reutilizarse un VMID, el mismo nombre no distingue dos VMs. | Se comprueba el UUID antes de actuar sobre la VM. Si desaparece del inventario, el borrado comprueba además que la creación ha terminado y el ID está libre antes de liberar la solicitud. |
+| Actualizaciones | Cambiar la RAM podía desconectar discos, NIC, PCI o USB añadidos en Proxmox o heredados de una plantilla. | Para retirar dispositivos sólo se consideran ranuras declaradas en la configuración anterior. Se rechazan reducciones de tamaño y cambios de almacenamiento de un disco existente antes de modificar la VM. |
+| IPAM | Fallar la reserva de la segunda NIC dejaba ocupada la dirección de la primera. Un registro persistido con el valor JSON `null` podía causar un pánico. | Las reservas de una solicitud se confirman juntas; los registros malformados se notifican sin sobrescribirlos. |
+| Selección de nodo | Una clase podía quedar fijada a un nodo sin almacenamiento para todos sus discos o sin un almacén ISO activo. | Se comprueban los discos y la ISO en el mismo nodo antes de guardar la elección, también cuando la clase deja Storage en blanco. |
+| Clones | Se enviaba un destino de almacenamiento no admitido para clones enlazados. Al buscar por nombre se podía elegir la primera de varias plantillas homónimas. | El clon enlazado hereda el almacenamiento de la plantilla. Los nombres ambiguos requieren un VMID y la búsqueda por nombre sólo considera plantillas QEMU. |
+| Validación | Algunos valores inválidos de YAML se convertían silenciosamente en disco SCSI o en límites de E/S o red sin aplicar. | El proveedor informa del dispositivo y rechaza la configuración. |
+| Integración continua | El trazado del script podía imprimir las credenciales generadas de Omni. | La espera comprueba sólo si existe la clave, su lectura se hace sin traza y Docker recibe el valor por entorno. |
+
+Compatibilidad: una VM antigua sin UUID verificable, o un clon antiguo interrumpido antes de recibir su identidad definitiva, puede requerir revisión manual. Las regresiones del proveedor usan respuestas simuladas de la API; no sustituyen una prueba de creación, migración y borrado en un clúster de pruebas.
+
+## Revisión inicial
+
 Fecha: 16 de noviembre de 2026.
 Base: `v4.1.0`, commit `7470b4bea946a4863d1fc5ce50f12f07e037802a`.
 Rama local: `codex/review-usability-bugfixes`.

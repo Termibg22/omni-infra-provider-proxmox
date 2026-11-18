@@ -81,6 +81,8 @@ func (f *fakeProxmox) handler() http.Handler {
 	vmPath := fmt.Sprintf("/nodes/%s/qemu/%d", fakeNode, fakeVMID)
 
 	mux := http.NewServeMux()
+	mux.HandleFunc("GET /cluster/resources", func(w http.ResponseWriter, _ *http.Request) { f.writeData(w, []any{}) })
+	mux.HandleFunc("GET /cluster/nextid", func(w http.ResponseWriter, _ *http.Request) { f.writeData(w, "100") })
 	mux.HandleFunc("/cluster/replication", func(w http.ResponseWriter, _ *http.Request) { f.writeData(w, []map[string]any{}) })
 
 	mux.HandleFunc(fmt.Sprintf("/nodes/%s/status", fakeNode), func(w http.ResponseWriter, _ *http.Request) {
@@ -101,7 +103,7 @@ func (f *fakeProxmox) handler() http.Handler {
 	})
 	mux.HandleFunc(vmPath+"/config", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method == http.MethodGet {
-			f.writeData(w, map[string]any{})
+			f.writeData(w, map[string]any{"name": "req-1", "smbios1": "uuid=11111111-1111-1111-1111-111111111111"})
 
 			return
 		}
@@ -109,7 +111,15 @@ func (f *fakeProxmox) handler() http.Handler {
 		f.writeData(w, f.addTask("qmconfig", "OK"))
 	})
 	mux.HandleFunc(fmt.Sprintf("/nodes/%s/storage", fakeNode), func(w http.ResponseWriter, _ *http.Request) {
-		f.writeData(w, []map[string]any{{"storage": "local", "content": "iso", "active": 1, "enabled": 1}})
+		// The SDK's default would pick this offline ISO store. The provider must
+		// select the active one explicitly before uploading the NoCloud ISO.
+		f.writeData(w, []map[string]any{
+			{"storage": "offline", "content": "iso", "active": 0, "enabled": 1},
+			{"storage": "local", "content": "iso", "active": 1, "enabled": 1},
+		})
+	})
+	mux.HandleFunc(fmt.Sprintf("/nodes/%s/storage/local/status", fakeNode), func(w http.ResponseWriter, _ *http.Request) {
+		f.writeData(w, map[string]any{"content": "iso", "active": 1, "enabled": 1})
 	})
 	mux.HandleFunc(fmt.Sprintf("/nodes/%s/storage/local/upload", fakeNode), func(w http.ResponseWriter, _ *http.Request) {
 		f.writeData(w, f.addTask("imgcopy", "OK"))

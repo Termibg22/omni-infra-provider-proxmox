@@ -1,3 +1,12 @@
+## [Omni Infra Provider Proxmox 4.1.11](https://github.com/Termibg22/omni-infra-provider-proxmox/tree/v4.1.11)
+
+- Verify the VM identity before starting, updating or destroying it. Check that creation has finished and the VMID is free before completing teardown of an absent VM.
+- Preserve unmanaged devices during updates. Reject slot collisions, disk shrink requests and changes to the storage of existing disks before applying VM changes.
+- Check disk and ISO storage on each candidate node, including automatic placement. Keep track of the storage holding the installation ISO across retries and provider restarts.
+- Check template volume locality before choosing a target for a clone. Reserve IPs for all interfaces together so a failed request does not occupy another VM's address.
+- Fix linked clones, reject ambiguous template names and report invalid hardware settings instead of silently ignoring them. Keep generated Omni credentials out of integration script traces.
+- Upgrade note: an old VM without a verifiable UUID or an interrupted clone from an earlier release may need manual identity verification.
+
 ## [Omni Infra Provider Proxmox 4.1.10](https://github.com/Termibg22/omni-infra-provider-proxmox/tree/v4.1.10)
 
 - Fix Secure Boot VMs stopping at the firmware's `Access Denied` screen: create the EFI disk without Proxmox's pre-enrolled keys, allowing the signed Talos ISO to enroll its own keys on first boot.

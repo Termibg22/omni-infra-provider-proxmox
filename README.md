@@ -33,11 +33,12 @@ Despite its historical name, `OMNI_SERVICE_ACCOUNT_KEY` must contain an **infras
 docker run -d --name omni-proxmox --restart unless-stopped \
   --mount type=bind,source="$(pwd)/config.yaml",target=/config.yaml,readonly \
   -e OMNI_ENDPOINT -e OMNI_SERVICE_ACCOUNT_KEY \
-  ghcr.io/termibg22/omni-infra-provider-proxmox:v4.1.10 \
+  ghcr.io/termibg22/omni-infra-provider-proxmox:v4.1.11 \
   --config-file /config.yaml
 ```
 
-`v4.1.10` fixes Secure Boot provisioning by preparing the EFI disk for Talos key enrollment. It retains VM/disk destruction fixes, the provisioning checkpoint fix, editor keepalive and physical PCI/USB discovery, and works with unmodified Omni.
+`v4.1.11` checks VM identity before updates and deletion, preserves unmanaged devices and fixes storage placement, IP allocation and linked clones.
+An older VM without a verifiable UUID or a clone interrupted before its final identity was assigned may need manual review.
 Do not use `latest` to pin a production deployment.
 
 If requests are stuck at `recordProviderData`, update and restart the provider while keeping the existing requests and VMs. The SDK resumes from the saved checkpoint (`syncHARules`) and records the applied configuration; it does not repeat VM creation or startup. This recovery path is covered by a controller regression test. The configuration now lives in the provider's Machine spec instead of an annotation, avoiding both control-character restrictions and the 16 KiB annotation limit. Older applied-data annotations remain readable for live-update validation.
@@ -46,7 +47,9 @@ If requests are stuck at `recordProviderData`, update and restart the provider w
 
 In Omni, create an **Auto Provision** Machine Class and select the Proxmox provider.
 For ordinary DHCP machines, the provider defaults to 2 cores, 4096 MB RAM, a 20 GB SCSI boot disk, and a VirtIO NIC on `vmbr0`.
-Select a storage and bridge that exist on every eligible target node, or constrain placement with a node/group.
+You can leave Storage blank: the provider checks each candidate node for active VM disk and ISO storage before selecting it.
+If you specify storage for a boot disk, additional disk or ISO, the same node must satisfy all selections.
+Choose a network bridge that exists on the eligible nodes or constrain placement with a node/group.
 
 The form uses flat fields so previously saved CPU, memory, boot disk and primary NIC values remain visible.
 For a normal VM, use Boot Disk and Primary NIC. Additional Disks and Additional NICs append devices.
@@ -151,10 +154,16 @@ See [EDITOR_FIXES.md](EDITOR_FIXES.md) for the issue-by-issue scope and verifica
 Existing-VM reconciliation reads **MachineRequest provider data**.
 Editing a Machine Class is not a guarantee that Omni will change already-created MachineRequests.
 When explicitly enabled, the reconciler can apply supported host configuration changes and grow disks; CPU/memory changes can remain pending until a VM reboot.
-It never shrinks disks.
+Reducing a managed disk's requested size or changing its storage or storage selector is rejected before any VM change.
+New disk slots can specify their own storage.
 Guest networking, installation media/extensions, firmware, and Talos volume changes require reprovisioning and are rejected when an applied configuration snapshot is available.
 The first observation of a legacy VM records a baseline without changing its hardware.
-Review any requested secondary-disk removal: reconciliation detaches removed data disks.
+Review any requested device removal: reconciliation detaches secondary disks, NICs, PCI and USB devices only from slots declared in the previous applied configuration and removed from the new one.
+Extra slots inherited from a template or added in Proxmox remain attached.
+If a newly requested slot is already occupied, the provider stops before migrating the VM or changing any devices.
+This also applies after a partial update if Proxmox attached a device but the provider never saved the new configuration.
+Check the named slot and its volume ID or hardware identity in Proxmox.
+Revert the conflicting request or arrange a vacant slot after preserving the existing device and its data; the provider will not assume ownership or delete it to retry.
 
 ## Advanced examples
 
@@ -245,6 +254,9 @@ disks:
 The template must already contain the intended Talos version, firmware, and extensions, and must support NoCloud configuration.
 The configured boot bus must match the template.
 Disk resizing grows the boot disk when needed; retries preserve existing disk volumes.
+Linked clones (`full_clone: false`) inherit the template's disk storage. Leave the boot storage blank or select the template's storage; choose a full clone to copy the boot disk to a different destination.
+If the template uses local storage, including for its EFI or TPM disk, provision the clone on the template's node.
+Cloning to another node requires shared template volumes; a remote full clone also requires shared destination storage.
 Selecting `iso` or clearing Provisioning Mode ignores saved template/clone settings without deleting them. For backward compatibility, YAML that omits `provisioning_mode` entirely and specifies `template_vmid` still clones. Changing the effective mode on an existing VM requires reprovisioning.
 
 ## Scheduling workloads on control planes

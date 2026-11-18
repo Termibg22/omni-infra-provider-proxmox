@@ -208,8 +208,13 @@ func (p *Provisioner) ReconcileExistingMachine(
 
 	data.ApplyWorkloadProfile()
 
+	var managedSlots deviceSlotCounts
+
 	if previous, ok := appliedProviderData(machine); ok {
-		if err := validateLiveUpdate(previous, data); err != nil {
+		var err error
+
+		managedSlots, err = validateLiveUpdate(previous, data)
+		if err != nil {
 			return err
 		}
 	}
@@ -218,16 +223,16 @@ func (p *Provisioner) ReconcileExistingMachine(
 		return err
 	}
 
-	vm, currentNode, err := p.locateExistingVM(ctx, spec.Node, spec.Vmid)
+	vm, err := p.locateExistingVM(ctx, machine)
 	if err != nil {
 		return err
 	}
 
-	spec.Node = currentNode
-
-	if bootErr := validateExistingBootSlot(vm, data.EffectiveDisks()); bootErr != nil {
-		return bootErr
+	if deviceErr := validateExistingVMDevices(vm, managedSlots, data); deviceErr != nil {
+		return deviceErr
 	}
+
+	spec.Node = vm.Node
 
 	// 1. Reconcile node / node_group placement (live-migrate if node or node_group changed)
 	vm, err = p.reconcileVMNodePlacement(ctx, logger, machine, vm, data)
@@ -238,12 +243,12 @@ func (p *Provisioner) ReconcileExistingMachine(
 	machineRequestSet, _ := machineRequest.Metadata().Labels().Get(omni.LabelMachineRequestSet)
 
 	// 2. Reconcile disks (attach new disks, resize grown disks, update disk flags, detach removed secondary disks)
-	if err := p.reconcileVMDisks(ctx, logger, vm, data); err != nil {
+	if err := p.reconcileVMDisks(ctx, logger, vm, data, managedSlots); err != nil {
 		return err
 	}
 
 	// 3. Reconcile NICs, CPU, Memory, Tags, PCI/USB mappings, and VM metadata
-	if err := p.reconcileVMConfigOptions(ctx, logger, vm, data, machineRequestSet); err != nil {
+	if err := p.reconcileVMConfigOptions(ctx, logger, vm, data, machineRequestSet, managedSlots); err != nil {
 		return err
 	}
 
@@ -282,28 +287,29 @@ func (p *Provisioner) ReconcileExistingMachine(
 	return p.reconcileVMHA(ctx, logger, machine, data, machineRequestSet)
 }
 
-func (p *Provisioner) locateExistingVM(ctx context.Context, recordedNode string, vmid int32) (*proxmox.VirtualMachine, string, error) {
-	if recordedNode != "" {
-		if vm, err := p.getVM(ctx, recordedNode, vmid); err == nil {
-			return vm, recordedNode, nil
+func (p *Provisioner) locateExistingVM(ctx context.Context, machine *resources.Machine) (*proxmox.VirtualMachine, error) {
+	spec := machine.TypedSpec().Value
+	if spec.Node != "" {
+		if vm, err := p.getVM(ctx, spec.Node, spec.Vmid); err == nil {
+			return vm, verifyVMIdentity(vm, machine, false)
 		}
 	}
 
-	actualNode, found, err := p.ha.FindVMNode(ctx, vmid)
+	actualNode, found, err := p.ha.FindVMNode(ctx, spec.Vmid)
 	if err != nil {
-		return nil, "", err
+		return nil, err
 	}
 
 	if !found {
-		return nil, "", fmt.Errorf("existing VM %d not found on any online Proxmox node", vmid)
+		return nil, fmt.Errorf("existing VM %d not found on any online Proxmox node", spec.Vmid)
 	}
 
-	vm, err := p.getVM(ctx, actualNode, vmid)
+	vm, err := p.getVM(ctx, actualNode, spec.Vmid)
 	if err != nil {
-		return nil, "", err
+		return nil, err
 	}
 
-	return vm, actualNode, nil
+	return vm, verifyVMIdentity(vm, machine, false)
 }
 
 func (p *Provisioner) reconcileVMNodePlacement(
@@ -341,13 +347,22 @@ func (p *Provisioner) reconcileVMNodePlacement(
 		return nil, fmt.Errorf("failed to migrate VM %d from %q to %q: %w", vm.VMID, vm.Node, targetNode, err)
 	}
 
-	if err := p.waitForTaskToFinish(ctx, migTask); err != nil {
-		return nil, fmt.Errorf("migration task for VM %d to %q failed: %w", vm.VMID, targetNode, err)
+	if waitErr := p.waitForTaskToFinish(ctx, migTask); waitErr != nil {
+		return nil, fmt.Errorf("migration task for VM %d to %q failed: %w", vm.VMID, targetNode, waitErr)
+	}
+
+	migrated, err := p.getVM(ctx, targetNode, int32(vm.VMID))
+	if err != nil {
+		return nil, err
+	}
+
+	if err := verifyVMIdentity(migrated, machine, false); err != nil {
+		return nil, err
 	}
 
 	machine.TypedSpec().Value.Node = targetNode
 
-	return p.getVM(ctx, targetNode, int32(vm.VMID))
+	return migrated, nil
 }
 
 func (p *Provisioner) desiredNodeForExistingVM(ctx context.Context, logger *zap.Logger, currentNode string, data Data) (string, error) {
@@ -398,11 +413,7 @@ func (p *Provisioner) desiredNodeForExistingVM(ctx context.Context, logger *zap.
 	return "", fmt.Errorf("no online node available in node_group %q to migrate VM from %q", data.NodeGroup, currentNode)
 }
 
-func (p *Provisioner) reconcileVMDisks(ctx context.Context, logger *zap.Logger, vm *proxmox.VirtualMachine, data Data) error {
-	return p.reconcileVMDisksWithPolicy(ctx, logger, vm, data, true)
-}
-
-func (p *Provisioner) reconcileVMDisksWithPolicy(ctx context.Context, logger *zap.Logger, vm *proxmox.VirtualMachine, data Data, detach bool) error {
+func (p *Provisioner) reconcileVMDisks(ctx context.Context, logger *zap.Logger, vm *proxmox.VirtualMachine, data Data, managedSlots deviceSlotCounts) error {
 	node, err := p.proxmoxClient.Node(ctx, vm.Node)
 	if err != nil {
 		return err
@@ -502,12 +513,12 @@ func (p *Provisioner) reconcileVMDisksWithPolicy(ctx context.Context, logger *za
 		bootSlot = newDiskOptions[0].Name
 	}
 
-	if !detach {
+	if len(managedSlots) == 0 {
 		return nil
 	}
 
 	// Detach secondary disks that were removed from the MachineSet (never detach the primary boot disk or ide* CD-ROMs)
-	return p.detachRemovedSecondaryDisks(ctx, logger, vm, existingDisks, desiredSlots, bootSlot)
+	return p.detachRemovedSecondaryDisks(ctx, logger, vm, existingDisks, desiredSlots, bootSlot, managedSlots)
 }
 
 func (p *Provisioner) detachRemovedSecondaryDisks(
@@ -517,9 +528,10 @@ func (p *Provisioner) detachRemovedSecondaryDisks(
 	existingDisks map[string]string,
 	desiredSlots map[string]struct{},
 	bootSlot string,
+	managedSlots deviceSlotCounts,
 ) error {
 	for slot, spec := range existingDisks {
-		if strings.HasPrefix(slot, "ide") || slot == bootSlot || strings.Contains(spec, "media=cdrom") {
+		if !managedSlots.owns(slot) || strings.HasPrefix(slot, "ide") || slot == bootSlot || strings.Contains(spec, "media=cdrom") {
 			continue
 		}
 
@@ -625,6 +637,7 @@ func (p *Provisioner) reconcileVMConfigOptions(
 	vm *proxmox.VirtualMachine,
 	data Data,
 	machineRequestSet string,
+	managedSlots deviceSlotCounts,
 ) error {
 	effectiveNICs := data.EffectiveNICs()
 
@@ -672,7 +685,7 @@ func (p *Provisioner) reconcileVMConfigOptions(
 	vmOptions = append(vmOptions, buildEnterpriseVMOptions(data)...)
 
 	// Delete any removed NICs, PCI devices, or USB devices
-	if toDelete := buildRemovedDeviceList(vm.VirtualMachineConfig, len(effectiveNICs), len(data.PCIDevices), len(data.USBDevices)); toDelete != "" {
+	if toDelete := buildRemovedDeviceList(vm.VirtualMachineConfig, len(effectiveNICs), len(data.PCIDevices), len(data.USBDevices), managedSlots); toDelete != "" {
 		vmOptions = append(vmOptions, proxmox.VirtualMachineOption{
 			Name:  "delete",
 			Value: toDelete,
@@ -719,7 +732,7 @@ func buildPCIDeviceOptions(devices []PCIDevice) []proxmox.VirtualMachineOption {
 	return options
 }
 
-func buildRemovedDeviceList(cfg *proxmox.VirtualMachineConfig, desiredNICs, desiredPCIs, desiredUSBs int) string {
+func buildRemovedDeviceList(cfg *proxmox.VirtualMachineConfig, desiredNICs, desiredPCIs, desiredUSBs int, managedSlots deviceSlotCounts) string {
 	if cfg == nil {
 		return ""
 	}
@@ -727,19 +740,19 @@ func buildRemovedDeviceList(cfg *proxmox.VirtualMachineConfig, desiredNICs, desi
 	var removed []string
 
 	for k := range cfg.Nets {
-		if idx, ok := parseIndexedDeviceSlot(k, "net"); ok && idx >= desiredNICs {
+		if idx, ok := parseIndexedDeviceSlot(k, "net"); ok && idx >= desiredNICs && idx < managedSlots["net"] {
 			removed = append(removed, k)
 		}
 	}
 
 	for k := range cfg.HostPCIs {
-		if idx, ok := parseIndexedDeviceSlot(k, "hostpci"); ok && idx >= desiredPCIs {
+		if idx, ok := parseIndexedDeviceSlot(k, "hostpci"); ok && idx >= desiredPCIs && idx < managedSlots["hostpci"] {
 			removed = append(removed, k)
 		}
 	}
 
 	for k := range cfg.USBs {
-		if idx, ok := parseIndexedDeviceSlot(k, "usb"); ok && idx >= desiredUSBs {
+		if idx, ok := parseIndexedDeviceSlot(k, "usb"); ok && idx >= desiredUSBs && idx < managedSlots["usb"] {
 			removed = append(removed, k)
 		}
 	}

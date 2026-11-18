@@ -1012,10 +1012,11 @@ func TestReconcileExistingMachineUpdatesDisksNICsAndMigratesNodeGroup(t *testing
 
 	vmCurrent := map[string]any{"vmid": 100, "status": "running", "name": "worker-1"}
 	vmConfig := map[string]any{
-		"scsi0": "local-lvm:vm-100-disk-0,size=20G,ssd=1",
-		"scsi2": "local-lvm:vm-100-disk-2,size=50G",
-		"net0":  "virtio=BC:24:11:AA:BB:01,bridge=vmbr0,firewall=1",
-		"net2":  "virtio=BC:24:11:AA:BB:03,bridge=vmbr2,firewall=0",
+		"smbios1": "uuid=11111111-1111-1111-1111-111111111111",
+		"scsi0":   "local-lvm:vm-100-disk-0,size=20G,ssd=1",
+		"scsi2":   "local-lvm:vm-100-disk-2,size=50G",
+		"net0":    "virtio=BC:24:11:AA:BB:01,bridge=vmbr0,firewall=1",
+		"net2":    "virtio=BC:24:11:AA:BB:03,bridge=vmbr2,firewall=0",
 	}
 
 	mux.HandleFunc("/nodes/pve1/qemu/100/status/current", func(w http.ResponseWriter, _ *http.Request) { writeJSON(w, vmCurrent) })
@@ -1093,8 +1094,10 @@ func TestReconcileExistingMachineUpdatesDisksNICsAndMigratesNodeGroup(t *testing
 	machine := resources.NewMachine("default", "worker-1")
 	machine.TypedSpec().Value.Node = "pve1"
 	machine.TypedSpec().Value.Vmid = 100
+	machine.TypedSpec().Value.Uuid = "11111111-1111-1111-1111-111111111111"
 
 	req := infra.NewMachineRequest("worker-1")
+	machine.TypedSpec().Value.AppliedProviderData = "disks: [{size: 20, storage: local-lvm}, {size: 50, storage: ceph-rbd}, {size: 50}]\nnics: [{mtu: 9000}, {}, {}]"
 	req.TypedSpec().Value.ProviderData = `
 node_group: rack-b
 cores: 8
